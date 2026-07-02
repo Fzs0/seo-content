@@ -65,7 +65,7 @@ const API_FORMATS = [
 ];
 const WORKSPACE_DRAFT_KEY = "seo-workbench.workspaceDraft.v1";
 const CUSTOM_OPTION_VALUE = "__custom__";
-const CONTENT_HUB_AUTO_RELOAD_TTL_MS = 15000;
+const CONTENT_HUB_AUTO_RELOAD_TTL_MS = 5 * 60 * 1000;
 
 const contentHubLoadState = {
   requestKey: "",
