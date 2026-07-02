@@ -5,6 +5,7 @@ import { methodNotAllowed, readJson, sendJson } from "../http.mjs";
 
 const MAIN_POSTS_LIST_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAIN_POSTS_LIST_FORCE_COOLDOWN_MS = 60 * 1000;
+const MAIN_POSTS_LIST_ERROR_COOLDOWN_MS = 60 * 1000;
 const mainPostsListCache = new Map();
 
 function requestHeaders(site, bodyText = "") {
@@ -246,6 +247,8 @@ async function listMainPosts(site, options = {}) {
   let total = 0;
   let pageTotal = 1;
 
+  console.log(`[main-sites/list] remote read site=${site.name || site.id || "main"} pageSize=${pageSize} maxPages=${maxPages} force=${Boolean(options.force)}`);
+
   while (page <= pageTotal && page <= maxPages) {
     const params = new URLSearchParams({ page: String(page), pagesize: String(pageSize) });
     const data = await requestMain(site, `/posts?${params.toString()}`, { method: "GET" });
@@ -294,6 +297,12 @@ async function listMainPostsCached(site, options = {}) {
     };
   }
 
+  if (cached?.error && now - cached.errorAt < MAIN_POSTS_LIST_ERROR_COOLDOWN_MS) {
+    throw new Error(
+      `主站文章列表刚刚读取失败，已进入 ${Math.round(MAIN_POSTS_LIST_ERROR_COOLDOWN_MS / 1000)} 秒冷却，避免重复请求远程 OpenAPI。上次错误：${cached.error}`,
+    );
+  }
+
   if (cached?.result && (!force || now - cached.at < MAIN_POSTS_LIST_FORCE_COOLDOWN_MS)) {
     return {
       ...cached.result,
@@ -338,7 +347,13 @@ async function listMainPostsCached(site, options = {}) {
         promise: null,
       });
     } else {
-      mainPostsListCache.delete(key);
+      mainPostsListCache.set(key, {
+        at: now,
+        result: null,
+        promise: null,
+        errorAt: Date.now(),
+        error: error.message || String(error),
+      });
     }
     throw error;
   }
