@@ -188,6 +188,10 @@ async function api(path, payload = null) {
   return data;
 }
 
+function requestId(prefix = "req") {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function readSelectOrCustom(selectId, customInputId) {
   const selected = $(selectId).value;
   return selected === CUSTOM_OPTION_VALUE ? $(customInputId).value.trim() : selected.trim();
@@ -1327,7 +1331,14 @@ async function loadContentHubSitePosts({ autoPlan = true, force = false } = {}) 
       state.blogPosts = posts;
     } else if (site.type === "main") {
       state.selectedMainSiteId = site.id;
-      data = await api("/api/main-sites/list", { siteId: site.id, pageSize: 100, maxPages: 20, force });
+      data = await api("/api/main-sites/list", {
+        siteId: site.id,
+        pageSize: 100,
+        maxPages: 20,
+        force,
+        source: "content-hub-read-button",
+        requestId: requestId("content-hub-main-list"),
+      });
       posts = data.posts || [];
       state.mainPosts = posts;
     }
@@ -2086,7 +2097,11 @@ async function saveMainSiteFromForm() {
 
 async function testMainSiteConnection() {
   $("mainPublishStatus").textContent = "正在测试主站 OpenAPI...";
-  const data = await api("/api/main-sites/test", { site: readMainSiteForm() });
+  const data = await api("/api/main-sites/test", {
+    site: readMainSiteForm(),
+    source: "main-site-test-button",
+    requestId: requestId("main-site-test"),
+  });
   if (data.site) {
     state.mainSites = state.mainSites.map((site) => (site.id === data.site.id ? data.site : site));
     if (!state.mainSites.some((site) => site.id === data.site.id)) state.mainSites.push(data.site);
@@ -2129,11 +2144,13 @@ async function listMainPosts({ force = false } = {}) {
     pageSize: 100,
     maxPages: 20,
     force,
+    source: "main-posts-list-button",
+    requestId: requestId("main-posts-list"),
   });
   state.mainPosts = data.posts || [];
   renderPostInventory("mainInventoryView", state.mainPosts, "main");
   $("mainPostsOutput").textContent = JSON.stringify(data, null, 2);
-  const cacheNote = data.cached ? "（使用本地 15 秒缓存）" : "";
+  const cacheNote = data.cached ? "（使用本地缓存/冷却保护）" : "";
   $("mainPublishStatus").textContent = data.truncated
     ? `已读取 ${data.fetched}/${data.total} 篇主站文章，结果被截断。${cacheNote}`
     : `已读取 ${data.fetched} 篇主站文章。${cacheNote}`;

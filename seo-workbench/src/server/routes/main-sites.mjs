@@ -69,7 +69,16 @@ async function requestMain(site, path, options = {}) {
     throw new Error(data.msg || data.message || data.error || data.raw || `Main site API returned ${statusCode}`);
   }
 
-  return data;
+  return {
+    data,
+    debug: {
+      targetUrl,
+      statusCode,
+      bytes: Buffer.byteLength(text || "", "utf8"),
+      code: data?.code,
+      msg: data?.msg || data?.message || "",
+    },
+  };
 }
 
 function siteForRequest(incoming = {}) {
@@ -242,32 +251,81 @@ function articlePayloadFromMarkdown(site, content, override = {}) {
 async function listMainPosts(site, options = {}) {
   const pageSize = Math.min(100, Math.max(1, Number(options.pageSize || 100)));
   const maxPages = Math.min(50, Math.max(1, Number(options.maxPages || 20)));
+  const requestId = options.requestId || `main-list-${Date.now()}`;
+  const source = options.source || "unknown";
   const posts = [];
+  const pageDebug = [];
+  const seenPages = new Set();
   let page = 1;
   let total = 0;
   let pageTotal = 1;
 
-  console.log(`[main-sites/list] remote read site=${site.name || site.id || "main"} pageSize=${pageSize} maxPages=${maxPages} force=${Boolean(options.force)}`);
+  console.log(`[main-sites/list] start requestId=${requestId} source=${source} site=${site.name || site.id || "main"} pageSize=${pageSize} maxPages=${maxPages} force=${Boolean(options.force)}`);
 
-  while (page <= pageTotal && page <= maxPages) {
+  for (let pageReads = 0; pageReads < maxPages; pageReads += 1) {
+    if (seenPages.has(page)) {
+      console.warn(`[main-sites/list] stop duplicate page requestId=${requestId} page=${page}`);
+      break;
+    }
+    seenPages.add(page);
+
     const params = new URLSearchParams({ page: String(page), pagesize: String(pageSize) });
-    const data = await requestMain(site, `/posts?${params.toString()}`, { method: "GET" });
+    const { data, debug } = await requestMain(site, `/posts?${params.toString()}`, { method: "GET" });
     const list = data.data?.list || data.list || [];
     const paginate = data.data?.paginate || data.paginate || {};
     posts.push(...list.map((post) => normalizeMainPost(post)));
     total = Number(paginate.total || total || posts.length);
     pageTotal = Number(paginate.pageTotal || pageTotal || 1);
-    if (!paginate.next) break;
-    page = Number(paginate.next);
+    pageDebug.push({
+      page,
+      url: debug.targetUrl,
+      statusCode: debug.statusCode,
+      bytes: debug.bytes,
+      code: debug.code,
+      listCount: list.length,
+      total,
+      pageTotal,
+      next: paginate.next ?? null,
+      currentPage: paginate.page ?? paginate.currentPage ?? null,
+    });
+    console.log(
+      `[main-sites/list] page requestId=${requestId} page=${page} status=${debug.statusCode} code=${debug.code ?? "n/a"} list=${list.length} total=${total || "n/a"} pageTotal=${pageTotal || "n/a"} next=${paginate.next ?? "n/a"} url=${debug.targetUrl}`,
+    );
+
+    const numericNext = Number(paginate.next);
+    if (Number.isFinite(numericNext) && numericNext > page && numericNext <= pageTotal) {
+      page = numericNext;
+      continue;
+    }
+
+    if (paginate.next && (!Number.isFinite(numericNext) || numericNext <= page)) {
+      console.warn(
+        `[main-sites/list] stop invalid paginate.next requestId=${requestId} currentPage=${page} next=${paginate.next}`,
+      );
+      break;
+    }
+
+    if (!paginate.next && page < pageTotal) {
+      page += 1;
+      continue;
+    }
+
+    break;
   }
+
+  console.log(`[main-sites/list] done requestId=${requestId} fetched=${posts.length} pages=${seenPages.size} total=${total || "n/a"}`);
 
   return {
     ok: true,
+    requestId,
+    source,
     total,
     fetched: posts.length,
     pageTotal,
     maxPages,
-    truncated: page <= pageTotal && posts.length < total,
+    pagesRead: seenPages.size,
+    truncated: seenPages.size >= maxPages && posts.length < total,
+    debug: pageDebug,
     posts,
   };
 }
@@ -292,6 +350,8 @@ async function listMainPostsCached(site, options = {}) {
     const result = await cached.promise;
     return {
       ...result,
+      requestId: options.requestId || result.requestId,
+      source: options.source || result.source,
       cached: true,
       shared: true,
     };
@@ -306,6 +366,8 @@ async function listMainPostsCached(site, options = {}) {
   if (cached?.result && (!force || now - cached.at < MAIN_POSTS_LIST_FORCE_COOLDOWN_MS)) {
     return {
       ...cached.result,
+      requestId: options.requestId || cached.result.requestId,
+      source: options.source || cached.result.source,
       cached: true,
       cachedAt: new Date(cached.at).toISOString(),
       forced: false,
@@ -316,6 +378,8 @@ async function listMainPostsCached(site, options = {}) {
   if (cached?.result && now - cached.at < MAIN_POSTS_LIST_CACHE_TTL_MS) {
     return {
       ...cached.result,
+      requestId: options.requestId || cached.result.requestId,
+      source: options.source || cached.result.source,
       cached: true,
       cachedAt: new Date(cached.at).toISOString(),
     };
@@ -385,7 +449,8 @@ export async function handleMainSitesRoute(request, response, pathname) {
 
   if (pathname === "/api/main-sites/test") {
     const site = body.site?.apiBaseUrl ? siteForRequest(body.site) : getMainSite(body.siteId, { includeSecrets: true });
-    const result = await listMainPosts(site, { pageSize: 10, maxPages: 1 });
+    console.log(`[main-sites/test] local request requestId=${body.requestId || "n/a"} source=${body.source || "n/a"} site=${site.name || site.id || site.apiBaseUrl || "main"}`);
+    const result = await listMainPosts(site, { pageSize: 10, maxPages: 1, source: body.source || "main-site-test", requestId: body.requestId });
     const savedSite = body.site?.apiBaseUrl ? saveMainSite(body.site) : getMainSite(site.id);
     sendJson(response, 200, { ...result, site: savedSite });
     return true;
@@ -393,7 +458,14 @@ export async function handleMainSitesRoute(request, response, pathname) {
 
   if (pathname === "/api/main-sites/list") {
     const site = getMainSite(body.siteId, { includeSecrets: true });
-    const options = { pageSize: body.pageSize, maxPages: body.maxPages, force: Boolean(body.force) };
+    const options = {
+      pageSize: body.pageSize,
+      maxPages: body.maxPages,
+      force: Boolean(body.force),
+      source: body.source || "main-sites-list",
+      requestId: body.requestId,
+    };
+    console.log(`[main-sites/list] local request requestId=${options.requestId || "n/a"} source=${options.source} force=${options.force} siteId=${body.siteId}`);
     const result = await listMainPostsCached(site, options);
     sendJson(response, 200, result);
     return true;
@@ -402,11 +474,11 @@ export async function handleMainSitesRoute(request, response, pathname) {
   if (pathname === "/api/main-sites/upload") {
     const site = getMainSite(body.siteId, { includeSecrets: true });
     const payload = articlePayloadFromMarkdown(site, body.content || "", body.override || {});
-    const result = await requestMain(site, "/posts", {
+    const { data: result, debug } = await requestMain(site, "/posts", {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    sendJson(response, 200, { ok: true, result, payloadPreview: payload });
+    sendJson(response, 200, { ok: true, result, debug, payloadPreview: payload });
     return true;
   }
 
