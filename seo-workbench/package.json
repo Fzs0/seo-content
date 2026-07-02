@@ -1,0 +1,15 @@
+{
+  "name": "seo-workbench",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Local deployable SEO keyword, content planning, and AI generation workbench.",
+  "scripts": {
+    "start": "node ./src/server/index.mjs",
+    "dev": "node ./src/server/index.mjs",
+    "check": "node --check ./app.js && node --check ./src/server/index.mjs && node --check ./server.example.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

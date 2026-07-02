@@ -1,0 +1,946 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>独立站 SEO 内容工作台</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <aside class="sidebar" aria-label="SEO workflow navigation">
+        <div class="brand-lockup">
+          <span class="brand-mark">S</span>
+          <div>
+            <p class="eyebrow">SEO Workbench</p>
+            <h1>内容增长中控台</h1>
+          </div>
+        </div>
+
+        <nav class="page-nav" aria-label="Workbench pages">
+          <a href="#page-setup" data-page-target="setup">项目设置</a>
+          <a href="#page-keywords" data-page-target="keywords">关键词池</a>
+          <a href="#page-intelligence" data-page-target="intelligence">内容中枢</a>
+          <a href="#page-production" data-page-target="production">生产</a>
+          <a href="#page-publishing" data-page-target="publishing">发布</a>
+          <a href="#page-todos" data-page-target="todos">待办</a>
+        </nav>
+
+        <nav class="step-nav">
+          <a href="#project">01 网站定位</a>
+          <a href="#standard">02 标准配置</a>
+          <a href="#keywords">03 关键词导入</a>
+          <a href="#allocation">04 分站评分</a>
+          <a href="#brief">05 Brief 规划</a>
+          <a href="#ai-stages">06 AI 阶段路由</a>
+          <a href="#generation">07 内容生成</a>
+          <a href="#exports">08 导出交付</a>
+          <a href="#todos">09 待做清单</a>
+        </nav>
+
+        <div class="sidebar-note">
+          <strong>核心原则</strong>
+          <p>先判断搜索意图和页面类型，再决定主站、博客 A/B/C 或暂不做。规则可以在页面里修改，保存后重新分析关键词即可生效。</p>
+        </div>
+      </aside>
+
+      <main class="content">
+        <section class="hero">
+          <div>
+            <p class="eyebrow">Google SEO Method System</p>
+            <h2>把 Semrush 关键词变成页面、博客、Brief 和可接入 AI 的生产流程</h2>
+            <p class="hero-copy">
+              这不是单纯写文章的页面，而是一套可迭代的 SEO 工作流：导入真实关键词表，读取标准配置，完成分词评分，生成 Brief，再按阶段选择不同 AI API。
+            </p>
+          </div>
+          <div class="hero-actions">
+            <button class="ghost-btn" id="exportStateBtn">导出项目 JSON</button>
+          </div>
+        </section>
+
+        <section class="metric-grid" aria-label="Workflow status">
+          <article class="metric-card">
+            <span>关键词总数</span>
+            <strong id="metricTotal">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>主站承接</span>
+            <strong id="metricMain">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>博客站群</span>
+            <strong id="metricBlogs">0</strong>
+          </article>
+          <article class="metric-card">
+            <span>P0/P1</span>
+            <strong id="metricPriority">0</strong>
+          </article>
+        </section>
+
+        <section class="panel" id="project">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Step 01</p>
+              <h3>网站定位输入卡</h3>
+            </div>
+            <span class="status-pill">先定边界</span>
+          </div>
+
+          <div class="helper-copy">
+            这里决定“哪些词应该给主站、哪些词给博客站”。如果你做的是 2C 商城，主站既可以做集合页，也可以写商业前教育文章。
+          </div>
+          <p class="api-warning">每换一个网站，建议至少填写“核心产品/类目词”和“主站商业页面”。否则系统只能按通用关键词信号粗分，Brief 里的承接页也会偏泛。</p>
+          <p class="api-warning locale-status" id="localeStatus">
+            P0 Locale：请先选择目标市场。正式关键词分析、SERP 判断和文章生成都必须绑定国家与语言。
+          </p>
+
+          <details class="preset-tree">
+            <summary>定位模板树：选择一个接近你业务的结构</summary>
+            <div class="preset-grid">
+              <button class="soft-btn" data-project-preset="d2c">2C 商城：产品购买 / 加购 / 下单</button>
+              <button class="soft-btn" data-project-preset="b2b">B2B 询盘站：表单 / WhatsApp / 邮件询盘</button>
+              <button class="soft-btn" data-project-preset="content">内容站：流量 / 订阅 / 广告或联盟</button>
+            </div>
+          </details>
+
+          <div class="form-grid">
+            <label>
+              主站域名
+              <input id="domainInput" type="text" placeholder="例如：https://your-store.com" />
+            </label>
+            <label>
+              网站类型
+              <select id="siteTypeInput">
+                <option value="2C商城">2C 商城</option>
+                <option value="B2B询盘站">B2B 询盘站</option>
+                <option value="SaaS">SaaS</option>
+                <option value="内容站">内容站</option>
+              </select>
+            </label>
+            <label>
+              目标市场
+              <select id="marketInput">
+                <option value="">请选择目标市场</option>
+                <option value="US / English">US / English</option>
+                <option value="UK / English">UK / English</option>
+                <option value="CA / English">CA / English</option>
+                <option value="AU / English">AU / English</option>
+                <option value="DE / German">DE / German</option>
+                <option value="FR / French">FR / French</option>
+                <option value="JP / Japanese">JP / Japanese</option>
+                <option value="EU / Multilingual">EU / Multilingual</option>
+                <option value="Global / English">Global / English</option>
+                <option value="__custom__">自定义市场...</option>
+              </select>
+            </label>
+            <label>
+              转化目标
+              <select id="conversionInput">
+                <option value="">请选择转化目标</option>
+                <option value="Add to cart / Purchase">Add to cart / Purchase</option>
+                <option value="Lead form / WhatsApp / Email inquiry">Lead form / WhatsApp / Email inquiry</option>
+                <option value="Subscribe / Affiliate click / Ad revenue">Subscribe / Affiliate click / Ad revenue</option>
+                <option value="Free trial / Demo booking">Free trial / Demo booking</option>
+                <option value="Download / Signup">Download / Signup</option>
+                <option value="__custom__">自定义转化目标...</option>
+              </select>
+            </label>
+            <label class="conditional-field" id="customMarketField">
+              自定义目标市场
+              <input id="customMarketInput" type="text" placeholder="例如：SG / English、MX / Spanish" />
+            </label>
+            <label class="conditional-field" id="customConversionField">
+              自定义转化目标
+              <input id="customConversionInput" type="text" placeholder="例如：Quote request、Call booking" />
+            </label>
+            <label>
+              核心产品/类目词
+              <input id="coreProductsInput" type="text" placeholder="例如：oxygen concentrator, portable oxygen machine" />
+            </label>
+          </div>
+
+          <div class="site-map-grid">
+            <label>
+              主站商业页面
+              <textarea id="mainPagesInput" rows="5" placeholder="/collections/category-a&#10;/collections/category-b&#10;/blogs/guides"></textarea>
+            </label>
+            <label>
+              博客站群定位
+              <textarea id="blogRolesInput" rows="5" placeholder="博客A：知识教程 / FAQ / 合规科普&#10;博客B：场景人群 / 需求解决&#10;博客C：对比评测 / Best / VS"></textarea>
+            </label>
+          </div>
+
+          <details class="preset-tree">
+            <summary>站点 API 数据源预留：之后可自动拉取主站页面和博客文章</summary>
+            <div class="site-api-grid">
+              <label>
+                主站页面 API
+                <input id="mainSiteApiInput" type="text" placeholder="例如：https://your-store.com/api/pages" />
+              </label>
+              <label>
+                主站文章 API
+                <input id="mainBlogApiInput" type="text" placeholder="例如：https://your-store.com/api/blogs" />
+              </label>
+              <label class="wide-field">
+                博客站 API 列表
+                <textarea id="blogApisInput" rows="4" placeholder="一行一个 API，例如：&#10;https://blog-a.com/api/posts&#10;https://blog-b.com/api/posts"></textarea>
+              </label>
+            </div>
+            <div class="button-row">
+              <button class="soft-btn" id="previewSiteApisBtn">测试抓取 API 数据源</button>
+            </div>
+            <pre id="siteApiPreview" class="markdown-box compact-box"></pre>
+            <p class="api-warning">当前先保存为项目上下文，后续可以接接口自动抓主站商业页、主站博客和博客站文章，再反向优化关键词分站。</p>
+          </details>
+          <p class="inline-status" id="projectSaveStatus">项目定位和导入结果会自动保存到本机浏览器。</p>
+        </section>
+
+        <section class="panel" id="standard">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Step 02</p>
+              <h3>SEO 标准配置</h3>
+            </div>
+            <div class="button-row">
+              <button class="soft-btn" id="reloadStandardBtn">重新读取标准</button>
+              <button class="primary-btn" id="saveStandardBtn">保存标准</button>
+            </div>
+          </div>
+
+          <div class="helper-copy">
+            这里是从 Excel 流程抽出来的标准骨架，更像“方法论模板”和“评分规则库”。换网站时优先改 Step 01 的网站定位；只有当分站逻辑、打分阈值、文章规范本身要升级时，才改这里。
+          </div>
+
+          <div class="standard-grid">
+            <div class="standard-summary" id="standardSummary"></div>
+            <label class="standard-editor">
+              标准配置 JSON
+              <textarea id="standardEditor" rows="22"></textarea>
+            </label>
+          </div>
+
+          <div class="guide-strip">
+            <div class="mini-rule">
+              <strong>改分站逻辑</strong>
+              <span>优先看 signals 和 classifier 规则，例如 best、review、how to、flavor。</span>
+            </div>
+            <div class="mini-rule">
+              <strong>改打分标准</strong>
+              <span>优先看 scoring.thresholds，P0/P1/P2 的阈值都在这里。</span>
+            </div>
+            <div class="mini-rule">
+              <strong>改文章规范</strong>
+              <span>看 references、imagePlacements 和 articleRules。</span>
+            </div>
+          </div>
+          <p class="inline-status" id="standardStatus"></p>
+        </section>
+
+        <section class="panel" id="keywords">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Step 03</p>
+              <h3>关键词导入</h3>
+            </div>
+            <div class="button-row">
+              <button class="soft-btn" id="importFileBtn">导入文件</button>
+              <button class="soft-btn" id="parseCsvBtn">解析粘贴内容</button>
+              <button class="soft-btn" id="reanalyzeKeywordsBtn">按当前定位重新分析</button>
+              <button class="soft-btn" id="clearKeywordsBtn">清空</button>
+            </div>
+          </div>
+
+          <div class="import-grid">
+            <div class="import-box">
+              <label>
+                上传 Semrush 导出的关键词表
+                <input id="keywordFileInput" type="file" accept=".csv,.tsv,.txt,.xlsx" />
+              </label>
+              <p class="api-warning">支持 `.csv`、`.tsv`、`.xlsx`。选择文件后会自动导入；也兼容 Semrush Keywords / Pages 导出的 Excel。至少需要 Keyword 列，建议包含 Volume、KD/Difficulty、Intent、URL/Page。</p>
+              <p class="inline-status" id="importStatus">还没有导入文件。</p>
+            </div>
+
+            <label class="import-box">
+              或者直接粘贴 CSV
+              <textarea id="csvInput" rows="10" placeholder="Keyword,Volume,Keyword Difficulty,Intent&#10;how to vape properly,2900,10,informational"></textarea>
+            </label>
+          </div>
+        </section>
+
+        <section class="panel" id="allocation">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Step 04</p>
+              <h3>分站评分结果</h3>
+            </div>
+            <div class="filter-row" id="siteFilters" aria-label="site filters"></div>
+          </div>
+
+          <div class="helper-copy">
+            分配结果默认只来自本地 SEO 标准配置、搜索意图、商业信号、KD、搜索量和网站定位上下文计算。关键词池的职责是先稳定展示规则层结果，不在这里直接让 AI 改写表格；如果要结合站点现有文章、站点角色和关键词机会做进一步判断，请去“站点内容中枢”里完成。
+          </div>
+
+          <div class="pagination-bar">
+            <div>
+              <strong id="paginationInfo">0 条</strong>
+              <span>当前表格按筛选结果分页显示，避免一次渲染太多行。</span>
+            </div>
+            <div class="pagination-controls">
+              <label>
+                每页
+                <select id="pageSizeInput">
+                  <option value="25">25</option>
+                  <option value="50" selected>50</option>
+                  <option value="100">100</option>
+                  <option value="200">200</option>
+                </select>
+              </label>
+              <button class="soft-btn" id="prevPageBtn">上一页</button>
+              <button class="soft-btn" id="nextPageBtn">下一页</button>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="keyword-table">
+              <thead>
+                <tr>
+                  <th>关键词</th>
+                  <th>主题集群</th>
+                  <th>搜索量</th>
+                  <th>KD</th>
+                  <th>意图</th>
+                  <th>最终站点</th>
+                  <th>页面类型</th>
+                  <th>页面角色</th>
+                  <th>目标资产</th>
+                  <th>内容动作</th>
+                  <th>优先级</th>
+                  <th>分数</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="keywordTableBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel" id="content-hub">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Content Intelligence</p>
+              <h3>站点内容中枢</h3>
+            </div>
+            <div class="button-row">
+              <button class="soft-btn" id="loadContentSitePostsBtn">重新读取文章</button>
+              <button class="soft-btn" id="planContentOpportunitiesBtn">分析文章并规划关键词</button>
+              <button class="soft-btn" id="selectTopOpportunitiesBtn">按数量勾选优先词</button>
+              <button class="ghost-btn" id="clearOpportunitySelectionBtn">清空勾选</button>
+              <button class="primary-btn" id="batchGenerateSelectedBtn">批量生成勾选文章</button>
+              <button class="soft-btn" id="batchUploadGeneratedBtn">批量导入本次生成</button>
+            </div>
+          </div>
+
+          <div class="helper-copy">
+            这里才是站点级 AI 判断的主工作区：把“站点已有文章”和“Semrush 关键词池”合在一起分析，先看哪些关键词已经覆盖、哪些主题缺口最值得写，再为新文章规划同站内链。当前默认规则是：非主站文章只做本站内链，不给主站或产品页外链。
+          </div>
+
+          <datalist id="siteMarketOptions">
+            <option value="US / English"></option>
+            <option value="UK / English"></option>
+            <option value="CA / English"></option>
+            <option value="AU / English"></option>
+            <option value="DE / German"></option>
+            <option value="FR / French"></option>
+            <option value="JP / Japanese"></option>
+            <option value="Global / English"></option>
+          </datalist>
+          <datalist id="siteLanguageOptions">
+            <option value="English"></option>
+            <option value="German"></option>
+            <option value="French"></option>
+            <option value="Japanese"></option>
+            <option value="Spanish"></option>
+            <option value="Italian"></option>
+            <option value="Portuguese"></option>
+          </datalist>
+
+          <div class="content-hub-controls">
+            <label>
+              选择要分析的站点
+              <select id="contentSiteSelect">
+                <option value="">请选择站点</option>
+              </select>
+            </label>
+            <label>
+              今天要生成几篇
+              <input id="batchGenerateCountInput" type="number" min="1" max="50" value="3" />
+            </label>
+            <label class="checkbox-field content-rule-check">
+              <input id="contentNoMainLinksInput" type="checkbox" checked />
+              非主站文章禁止给主站/产品页外链
+            </label>
+            <label class="checkbox-field content-rule-check">
+              <input id="contentShowIncompatibleInput" type="checkbox" />
+              显示不匹配当前市场的站点
+            </label>
+          </div>
+
+          <div class="standard-summary content-hub-summary" id="contentHubSummary"></div>
+          <p class="inline-status" id="contentHubStatus">先选择一个具体站点，系统会自动读取该站点文章，再生成内容机会池。</p>
+
+          <div class="diagnosis-view inventory-view" id="contentInventoryView"></div>
+          <div class="diagnosis-view" id="contentOptimizationView"></div>
+
+          <div class="table-wrap content-opportunity-wrap">
+            <table class="content-opportunity-table">
+              <thead>
+                <tr>
+                  <th>选</th>
+                  <th>关键词 / 主题</th>
+                  <th>覆盖情况</th>
+                  <th>推荐站点</th>
+                  <th>页面类型</th>
+                  <th>动作</th>
+                  <th>优先级</th>
+                  <th>分数</th>
+                  <th>内链规划</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="contentOpportunityTableBody"></tbody>
+            </table>
+          </div>
+
+          <article class="generated-card content-batch-card">
+            <h4>批量生成日志</h4>
+            <pre class="markdown-box compact-box scroll-box" id="batchGenerationLog">还没有批量生成任务。</pre>
+          </article>
+        </section>
+
+        <section class="panel split-panel" id="brief">
+          <div class="panel-heading full">
+            <div>
+              <p class="eyebrow">Step 05</p>
+              <h3>Brief 规划</h3>
+            </div>
+            <button class="primary-btn" id="copyBriefBtn">复制 Brief</button>
+          </div>
+
+          <article class="brief-card">
+            <h4 id="briefTitle">请选择一个关键词</h4>
+            <div id="briefMeta" class="brief-meta"></div>
+            <pre id="briefOutput" class="markdown-box"></pre>
+          </article>
+
+          <article class="rule-stack">
+            <div class="rule-card important">
+              <h4>References 不是固定模块</h4>
+              <p>普通经验文、口味文、场景文、产品灵感文可以 0 引用。只有涉及官方定义、安全、法规、年龄、电池回收等内容时才触发。</p>
+            </div>
+            <div class="rule-card">
+              <h4>图片位置要跟着文章走</h4>
+              <p>每篇文章都输出 Image Placement Map，写清楚封面图、流程图、对比图、CTA 图放在哪里，以及对应 alt。</p>
+            </div>
+            <div class="rule-card">
+              <h4>主站也可以写文章</h4>
+              <p>如果关键词离购买很近，比如 best、review、choose、how to use，主站博客可以承接，不必全部丢给站群。</p>
+            </div>
+          </article>
+        </section>
+
+        <section class="panel" id="ai-stages">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Step 06</p>
+              <h3>AI 阶段路由</h3>
+            </div>
+            <div class="button-row">
+              <button class="soft-btn" id="applyDeepSeekAllBtn">全部阶段使用 DeepSeek</button>
+              <button class="soft-btn" id="resetAiConfigBtn">恢复默认</button>
+              <button class="primary-btn" id="saveAiConfigBtn">保存到服务端</button>
+            </div>
+          </div>
+
+          <div class="helper-copy">
+            你可以让不同阶段接不同模型。例如关键词分析用 DeepSeek，文章生成用 OpenAI。API Key 可以在这里填写，但会保存到服务端本地配置文件，页面再次读取时只显示密钥状态。
+          </div>
+
+          <div class="deepseek-quick-config">
+            <label>
+              统一 DeepSeek API Key
+              <input id="deepSeekApiKeyInput" type="password" placeholder="填入一次，然后应用到全部 DeepSeek 阶段" autocomplete="off" />
+            </label>
+            <button class="primary-btn" id="applyDeepSeekKeyBtn">把这个 Key 应用到全部阶段</button>
+            <p class="api-warning">如果你现阶段全部用 DeepSeek，推荐先点“全部阶段使用 DeepSeek”，再在这里填一次 Key，最后点“保存到服务端”。</p>
+          </div>
+
+          <div class="stage-grid" id="stageConfigGrid"></div>
+          <p class="inline-status" id="aiConfigStatus">AI 配置尚未保存。</p>
+
+          <div class="guide-strip">
+            <div class="mini-rule">
+              <strong>关键词分析阶段</strong>
+              <span>适合用成本低、响应快的模型做二次复核。</span>
+            </div>
+            <div class="mini-rule">
+              <strong>文章生成阶段</strong>
+              <span>适合用质量更高的模型写完整 Markdown。</span>
+            </div>
+            <div class="mini-rule">
+              <strong>OpenAI 兼容中转站</strong>
+              <span>Base URL 填 https://你的中转站/v1，API Key 填中转站 key，模型名填中转站支持的模型。</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="generation">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Step 07</p>
+              <h3>内容生成控制台</h3>
+            </div>
+            <div class="button-row">
+              <button class="soft-btn" id="aiReviewKeywordsBtn">AI 复核关键词清单</button>
+              <button class="soft-btn" id="buildPromptBtn">生成 Prompt</button>
+              <button class="primary-btn" id="mockGenerateBtn">生成文章</button>
+            </div>
+          </div>
+
+          <div class="ai-grid">
+            <div class="api-card">
+              <h4>本次生成使用的阶段</h4>
+              <label>
+                文章生成阶段
+                <select id="articleStageInput">
+                  <option value="articleGeneration">文章生成：Article Generation</option>
+                  <option value="contentOptimization">内容优化：Content Optimization</option>
+                </select>
+              </label>
+              <p class="api-warning">如果该阶段选择 Local/Mock，会使用本地模拟文章；如果选择外部供应商，会请求 `/api/generate`，再由服务端转发到对应阶段的 API。</p>
+            </div>
+
+            <label class="prompt-card">
+              AI Prompt
+              <textarea id="promptOutput" rows="16"></textarea>
+            </label>
+          </div>
+
+          <div class="generated-card">
+            <div class="panel-heading compact">
+              <h4>生成结果预览</h4>
+              <div class="button-row">
+                <button class="ghost-btn" id="copyMetaBtn">复制 WP 字段</button>
+                <button class="ghost-btn" id="copyBodyBtn">复制正文</button>
+                <button class="ghost-btn" id="copyArticleBtn">复制结果</button>
+                <button class="ghost-btn" id="downloadArticleBtn">下载 Markdown</button>
+              </div>
+            </div>
+            <p class="inline-status" id="articleSaveStatus">生成后的文章会自动保存到 generated-articles/站点名/ 目录。</p>
+            <div class="article-part-grid">
+              <article class="article-part-card">
+                <h5>WordPress 字段</h5>
+                <pre id="articleMetaOutput" class="markdown-box compact-box scroll-box"></pre>
+              </article>
+              <article class="article-part-card article-part-wide">
+                <h5>正文 Body</h5>
+                <pre id="articleBodyOutput" class="markdown-box tall scroll-box"></pre>
+              </article>
+              <article class="article-part-card">
+                <h5>References</h5>
+                <pre id="articleReferencesOutput" class="markdown-box compact-box scroll-box"></pre>
+              </article>
+              <article class="article-part-card">
+                <h5>图片 / 表格位置</h5>
+                <pre id="articleImageOutput" class="markdown-box compact-box scroll-box"></pre>
+              </article>
+              <article class="article-part-card">
+                <h5>内链建议</h5>
+                <pre id="articleLinksOutput" class="markdown-box compact-box scroll-box"></pre>
+              </article>
+              <article class="article-part-card">
+                <h5>QA / Evidence</h5>
+                <pre id="articleQaOutput" class="markdown-box compact-box scroll-box"></pre>
+              </article>
+              <article class="article-part-card article-part-wide">
+                <h5>完整 Markdown</h5>
+                <pre id="articleOutput" class="markdown-box tall scroll-box"></pre>
+              </article>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" id="exports">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Step 08</p>
+              <h3>导出交付</h3>
+            </div>
+            <div class="button-row">
+              <button class="soft-btn" id="exportCsvBtn">导出关键词 CSV</button>
+              <button class="soft-btn" id="exportCalendarBtn">导出内容日历 CSV</button>
+              <button class="soft-btn" id="downloadStandardBtn">导出标准 JSON</button>
+            </div>
+          </div>
+
+          <div class="export-grid">
+            <div>
+              <h4>可以交付给团队</h4>
+              <p>关键词分站结果、P0/P1 内容日历、单篇 Brief、AI Prompt、References 判断、图片位置规划。</p>
+            </div>
+            <div>
+              <h4>后续可继续接入</h4>
+              <p>数据库保存项目、批量文章队列、人工审核状态、图片生成、WordPress/Shopify/Webflow 发布。</p>
+            </div>
+          </div>
+
+          <div class="wp-publisher-card">
+            <div class="panel-heading compact">
+              <h4>WordPress 发布连接</h4>
+              <div class="button-row">
+                <button class="soft-btn" id="saveWpSiteBtn">保存站点</button>
+                <button class="soft-btn" id="testWpSiteBtn">测试连接</button>
+                <button class="soft-btn" id="diagnoseWpSiteBtn">分步诊断</button>
+                <button class="soft-btn" id="listWpPostsBtn">读取文章列表</button>
+                <button class="soft-btn" id="aiDiagnoseWpPostsBtn">AI 诊断文章</button>
+                <button class="primary-btn" id="uploadCurrentArticleBtn">上传当前文章</button>
+              </div>
+            </div>
+            <div class="helper-copy">
+              使用 WordPress 应用密码连接 REST API。文章会读取当前生成结果里的 Title、Meta Description、URL Slug 和正文，默认上传为草稿。
+            </div>
+            <div class="wp-form-grid">
+              <label>
+                已保存站点
+                <select id="wpSiteSelect">
+                  <option value="">新建站点配置</option>
+                </select>
+              </label>
+              <label>
+                站点名称
+                <input id="wpSiteNameInput" type="text" placeholder="例如：Exdivo 主站博客" />
+              </label>
+              <label>
+                WordPress 站点地址
+                <input id="wpSiteUrlInput" type="text" placeholder="例如：https://example.com" />
+              </label>
+              <label>
+                用户名
+                <input id="wpUsernameInput" type="text" placeholder="WordPress 用户名" autocomplete="off" />
+              </label>
+              <label>
+                应用密码
+                <input id="wpApplicationPasswordInput" type="password" placeholder="用户资料页生成的 Application Password" autocomplete="off" />
+              </label>
+              <label>
+                默认发布状态
+                <select id="wpDefaultStatusInput">
+                  <option value="draft">草稿 draft</option>
+                  <option value="pending">待审核 pending</option>
+                  <option value="publish">直接发布 publish</option>
+                </select>
+              </label>
+              <label>
+                默认分类 ID
+                <input id="wpDefaultCategoryInput" type="text" placeholder="可选，例如：12" />
+              </label>
+              <label>
+                目标市场
+                <input id="wpTargetMarketInput" type="text" list="siteMarketOptions" placeholder="例如：US / English、DE / German" />
+              </label>
+              <label>
+                内容语种
+                <input id="wpTargetLanguageInput" type="text" list="siteLanguageOptions" placeholder="例如：English、German" />
+              </label>
+              <label>
+                负责板块
+                <select id="wpContentRoleInput">
+                  <option value="博客A-知识教程">博客A：知识教程 / FAQ / 合规科普</option>
+                  <option value="博客B-场景人群">博客B：场景人群 / 需求解决</option>
+                  <option value="博客C-对比评测">博客C：对比评测 / Best / VS</option>
+                  <option value="主站-博客">主站博客</option>
+                  <option value="暂不做">暂不做</option>
+                </select>
+              </label>
+              <label>
+                内容范围
+                <input id="wpContentScopeInput" type="text" placeholder="例如：新手教程、法规科普、best/review" />
+              </label>
+              <label>
+                获取单篇文章 ID
+                <input id="wpPostIdInput" type="text" placeholder="Post ID, for example 123" />
+              </label>
+            </div>
+            <div class="button-row wp-secondary-actions">
+              <button class="ghost-btn" id="getWpPostBtn">获取单篇文章</button>
+              <button class="ghost-btn" id="deleteWpSiteBtn">删除当前站点</button>
+            </div>
+            <p class="inline-status" id="wpPublishStatus">尚未配置 WordPress 站点。应用密码会保存到服务端本地配置，不会回传到浏览器。</p>
+            <pre class="markdown-box compact-box wp-diagnostics-output" id="wpDiagnosticsOutput"></pre>
+            <div class="diagnosis-view inventory-view" id="wpInventoryView"></div>
+            <div class="diagnosis-view" id="wpDiagnosisView"></div>
+            <pre class="markdown-box compact-box wp-posts-output" id="wpPostsOutput"></pre>
+          </div>
+
+          <div class="blog-publisher-card">
+            <div class="panel-heading compact">
+              <h4>自建博客后台发布连接</h4>
+              <div class="button-row">
+                <button class="soft-btn" id="saveBlogSiteBtn">保存站点</button>
+                <button class="soft-btn" id="testBlogSiteBtn">测试连接</button>
+                <button class="soft-btn" id="listBlogPostsBtn">读取文章列表</button>
+                <button class="soft-btn" id="aiDiagnoseBlogPostsBtn">AI 诊断文章</button>
+                <button class="primary-btn" id="uploadCurrentBlogArticleBtn">上传当前文章</button>
+              </div>
+            </div>
+            <div class="helper-copy">
+              使用你的 Open API 发布到自建博客后台。接口默认使用 <code>/api/open/v1/posts</code> 和 <code>/api/open/v1/posts/batch</code>，请求头会自动加入 <code>Authorization: Bearer &lt;open_api_key&gt;</code>。
+            </div>
+            <div class="blog-form-grid">
+              <label>
+                已保存博客站
+                <select id="blogSiteSelect">
+                  <option value="">新建自建博客配置</option>
+                </select>
+              </label>
+              <label>
+                站点名称
+                <input id="blogSiteNameInput" type="text" placeholder="例如：Blog A / Vape Guide Blog" />
+              </label>
+              <label>
+                Open API 地址
+                <input id="blogApiBaseUrlInput" type="text" placeholder="例如：http://localhost 或 https://blog.com/api/open/v1" />
+              </label>
+              <label>
+                Open API Key
+                <input id="blogOpenApiKeyInput" type="password" placeholder="只填 key，系统会自动加 Bearer" autocomplete="off" />
+              </label>
+              <label>
+                默认作者
+                <input id="blogDefaultAuthorInput" type="text" placeholder="Admin" />
+              </label>
+              <label>
+                默认发布状态
+                <select id="blogDefaultStatusInput">
+                  <option value="draft">草稿 draft</option>
+                  <option value="published">直接发布 published</option>
+                </select>
+              </label>
+              <label>
+                默认分类 ID
+                <input id="blogDefaultCategoryInput" type="text" placeholder="可选；留空会传 null" />
+              </label>
+              <label>
+                默认封面 URL
+                <input id="blogDefaultCoverInput" type="text" placeholder="可选：https://cdn.example.com/cover.jpg" />
+              </label>
+              <label>
+                目标市场
+                <input id="blogTargetMarketInput" type="text" list="siteMarketOptions" placeholder="例如：US / English、DE / German" />
+              </label>
+              <label>
+                内容语种
+                <input id="blogTargetLanguageInput" type="text" list="siteLanguageOptions" placeholder="例如：English、German" />
+              </label>
+              <label>
+                负责板块
+                <select id="blogContentRoleInput">
+                  <option value="博客A-知识教程">博客A：知识教程 / FAQ / 合规科普</option>
+                  <option value="博客B-场景人群">博客B：场景人群 / 需求解决</option>
+                  <option value="博客C-对比评测">博客C：对比评测 / Best / VS</option>
+                  <option value="主站-博客">主站博客</option>
+                  <option value="暂不做">暂不做</option>
+                </select>
+              </label>
+              <label>
+                内容范围
+                <input id="blogContentScopeInput" type="text" placeholder="例如：口味灵感、人群场景、对比评测" />
+              </label>
+              <label>
+                获取单篇文章 ID
+                <input id="blogPostIdInput" type="text" placeholder="填写后点击获取单篇文章" />
+              </label>
+              <label>
+                批量 Markdown 文件
+                <input id="blogMarkdownFilesInput" type="file" accept=".md,.markdown,.txt" multiple />
+              </label>
+            </div>
+            <div class="button-row wp-secondary-actions">
+              <button class="ghost-btn" id="getBlogPostBtn">获取单篇文章</button>
+              <button class="ghost-btn" id="uploadBlogMarkdownFilesBtn">批量上传 Markdown</button>
+              <button class="ghost-btn" id="deleteBlogSiteBtn">删除当前站点</button>
+            </div>
+            <p class="inline-status" id="blogPublishStatus">尚未配置自建博客站点。Open API Key 会保存到服务端本地配置，不会回传到浏览器。</p>
+            <div class="diagnosis-view inventory-view" id="blogInventoryView"></div>
+            <div class="diagnosis-view" id="blogDiagnosisView"></div>
+            <pre class="markdown-box compact-box blog-posts-output" id="blogPostsOutput"></pre>
+          </div>
+
+          <div class="main-publisher-card">
+            <div class="panel-heading compact">
+              <h4>主站 OpenAPI 文章连接</h4>
+              <div class="button-row">
+                <button class="soft-btn" id="saveMainSiteBtn">保存主站</button>
+                <button class="soft-btn" id="testMainSiteBtn">测试连接</button>
+                <button class="soft-btn" id="listMainPostsBtn">读取文章列表</button>
+                <button class="soft-btn" id="aiDiagnoseMainPostsBtn">AI 诊断文章</button>
+                <button class="primary-btn" id="uploadCurrentMainArticleBtn">上传当前文章</button>
+              </div>
+            </div>
+            <div class="helper-copy">
+              用于连接主站文章 OpenAPI。系统会请求 <code>/posts</code> 获取文章列表，也会通过 <code>POST /posts</code> 创建文章；两个 <code>token</code> 请求头会保存到服务端本地配置，不会回传到浏览器。
+            </div>
+            <div class="main-form-grid">
+              <label>
+                已保存主站
+                <select id="mainSiteSelect">
+                  <option value="">新建主站 OpenAPI 配置</option>
+                </select>
+              </label>
+              <label>
+                站点名称
+                <input id="mainSiteNameInput" type="text" placeholder="例如：Exdivo 主站" />
+              </label>
+              <label>
+                OpenAPI 地址
+                <input id="mainApiBaseUrlInput" type="text" placeholder="例如：https://openapi.oemapps.com" />
+              </label>
+              <label>
+                token 请求头 1
+                <input id="mainTokenAInput" type="password" placeholder="第一个 token 值" autocomplete="off" />
+              </label>
+              <label>
+                token 请求头 2
+                <input id="mainTokenBInput" type="password" placeholder="第二个 token 值" autocomplete="off" />
+              </label>
+              <label>
+                默认作者
+                <input id="mainDefaultAuthorInput" type="text" placeholder="Admin" />
+              </label>
+              <label>
+                默认发布状态
+                <select id="mainDefaultStatusInput">
+                  <option value="0">未发布 0</option>
+                  <option value="1">已发布 1</option>
+                </select>
+              </label>
+              <label>
+                URL 路径前缀 src
+                <input id="mainDefaultSrcPrefixInput" type="text" placeholder="/blogs/" />
+              </label>
+              <label>
+                默认图片资源 ID
+                <input id="mainDefaultImageIdInput" type="text" placeholder="可选，例如：123" />
+              </label>
+              <label>
+                是否采集正文图片
+                <select id="mainCollectImagesInput">
+                  <option value="0">否 0</option>
+                  <option value="1">是 1</option>
+                </select>
+              </label>
+              <label>
+                关联商品 ID
+                <input id="mainRelatedProductIdsInput" type="text" placeholder="可选，例如：[123,234] 或 123,234" />
+              </label>
+              <label>
+                目标市场
+                <input id="mainTargetMarketInput" type="text" list="siteMarketOptions" placeholder="例如：US / English" />
+              </label>
+              <label>
+                内容语种
+                <input id="mainTargetLanguageInput" type="text" list="siteLanguageOptions" placeholder="例如：English" />
+              </label>
+              <label>
+                负责板块
+                <select id="mainContentRoleInput">
+                  <option value="主站-博客">主站博客</option>
+                  <option value="主站-商业页面">主站商业页面</option>
+                  <option value="博客A-知识教程">博客A：知识教程 / FAQ / 合规科普</option>
+                  <option value="博客B-场景人群">博客B：场景人群 / 需求解决</option>
+                  <option value="博客C-对比评测">博客C：对比评测 / Best / VS</option>
+                </select>
+              </label>
+              <label>
+                内容范围
+                <input id="mainContentScopeInput" type="text" placeholder="例如：商业前教育、购买指南、主站博客" />
+              </label>
+            </div>
+            <div class="button-row wp-secondary-actions">
+              <button class="ghost-btn" id="deleteMainSiteBtn">删除当前主站</button>
+            </div>
+            <p class="inline-status" id="mainPublishStatus">尚未配置主站 OpenAPI。请先填写 OpenAPI 地址和两个 token。</p>
+            <div class="diagnosis-view inventory-view" id="mainInventoryView"></div>
+            <div class="diagnosis-view" id="mainDiagnosisView"></div>
+            <pre class="markdown-box compact-box main-posts-output" id="mainPostsOutput"></pre>
+          </div>
+        </section>
+
+        <section class="panel" id="todos">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Step 09</p>
+              <h3>待做清单</h3>
+            </div>
+            <div class="button-row">
+              <button class="soft-btn" id="saveTodosBtn">保存 Todo</button>
+              <button class="soft-btn" id="exportTodosBtn">导出 Todo JSON</button>
+            </div>
+          </div>
+
+          <div class="helper-copy">
+            这里用来记录之后要做什么、缺什么能力、哪个流程需要优化。Todo 会保存到本地服务端文件，适合当项目路线图使用。
+          </div>
+
+          <div class="todo-grid">
+            <article class="todo-composer">
+              <h4>新增待办</h4>
+              <label>
+                标题
+                <input id="todoTitleInput" type="text" placeholder="例如：给关键词分析接入 DeepSeek 复核" />
+              </label>
+              <div class="todo-form-row">
+                <label>
+                  分类
+                  <select id="todoCategoryInput">
+                    <option value="功能迭代">功能迭代</option>
+                    <option value="关键词流程">关键词流程</option>
+                    <option value="文章生成">文章生成</option>
+                    <option value="AI 接入">AI 接入</option>
+                    <option value="数据存储">数据存储</option>
+                    <option value="发布部署">发布部署</option>
+                    <option value="问题修复">问题修复</option>
+                  </select>
+                </label>
+                <label>
+                  优先级
+                  <select id="todoPriorityInput">
+                    <option value="P0">P0 紧急</option>
+                    <option value="P1">P1 重要</option>
+                    <option value="P2" selected>P2 普通</option>
+                    <option value="P3">P3 以后再说</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                备注
+                <textarea id="todoNoteInput" rows="5" placeholder="补充背景、验收标准、相关页面或缺口。"></textarea>
+              </label>
+              <button class="primary-btn" id="addTodoBtn">加入待办</button>
+              <p class="inline-status" id="todoStatusMessage">Todo 会保存在 data/todos.local.json。</p>
+            </article>
+
+            <article class="todo-board">
+              <div class="todo-board-heading">
+                <h4>路线图</h4>
+                <span id="todoCountBadge" class="badge">0 项</span>
+              </div>
+              <div class="todo-list" id="todoList"></div>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
