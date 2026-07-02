@@ -1288,7 +1288,7 @@ async function loadContentHubSitePosts({ autoPlan = true, force = false } = {}) 
 
   if (hasFreshPosts) {
     if (autoPlan && state.keywords.length) planContentOpportunities();
-    $("contentHubStatus").textContent = `已复用最近 15 秒内读取过的 ${site.name} 文章列表。`;
+    $("contentHubStatus").textContent = `已复用最近 5 分钟内读取过的 ${site.name} 文章列表。`;
     return;
   }
 
@@ -1366,11 +1366,11 @@ function planContentOpportunities() {
     return;
   }
   if (!site) {
-    $("contentHubStatus").textContent = "请先选择一个具体站点，系统会自动读取这个站点的文章。";
+    $("contentHubStatus").textContent = "请先选择一个具体站点，再点击“读取/刷新文章”。";
     return;
   }
   if (!posts.length) {
-    $("contentHubStatus").textContent = `还没有读取到 ${site.name} 的文章。请先选择站点，或点击“重新读取文章”。`;
+    $("contentHubStatus").textContent = `还没有读取到 ${site.name} 的文章。请点击“读取/刷新文章”。`;
     return;
   }
 
@@ -1486,7 +1486,7 @@ function renderContentHub() {
   $("contentHubStatus").textContent = opportunities.length
     ? `已规划 ${opportunities.length} 个内容机会。非主站外链策略：${state.contentHub.noMainOutboundLinks ? "禁止给主站/产品页外链" : "允许按需外链"}。`
     : site
-      ? `当前站点：${site.name}。选择站点后会自动读取文章；如需刷新，点击“重新读取文章”。`
+      ? `当前站点：${site.name}。系统不会自动请求远程文章；需要分析时请点击“读取/刷新文章”。`
       : "请先选择一个具体站点。";
 }
 
@@ -3894,8 +3894,15 @@ function bindEvents() {
     state.contentHub.posts = [];
     state.contentHub.opportunities = [];
     state.contentHub.selectedIds = [];
+    state.contentHub.activeOpportunity = null;
+    contentHubLoadState.lastLoadedKey = "";
+    contentHubLoadState.lastLoadedAt = 0;
     renderContentHub();
-    loadContentHubSitePosts({ autoPlan: true }).catch((error) => ($("contentHubStatus").textContent = `读取文章失败：${error.message}`));
+    const site = selectedContentSite();
+    $("contentHubStatus").textContent = site
+      ? `已选择 ${site.name}。为避免重复请求远程 API，请点击“读取/刷新文章”后再规划内容机会。`
+      : "请先选择一个具体站点。";
+    saveWorkspaceDraft();
   });
   $("contentNoMainLinksInput").addEventListener("change", () => {
     state.contentHub.noMainOutboundLinks = $("contentNoMainLinksInput").checked;

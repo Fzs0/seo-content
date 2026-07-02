@@ -3,7 +3,8 @@ import { request as httpsRequest } from "node:https";
 import { deleteMainSite, getMainSite, normalizeApiBaseUrl, readMainSites, saveMainSite } from "../main-sites-store.mjs";
 import { methodNotAllowed, readJson, sendJson } from "../http.mjs";
 
-const MAIN_POSTS_LIST_CACHE_TTL_MS = 15000;
+const MAIN_POSTS_LIST_CACHE_TTL_MS = 5 * 60 * 1000;
+const MAIN_POSTS_LIST_FORCE_COOLDOWN_MS = 60 * 1000;
 const mainPostsListCache = new Map();
 
 function requestHeaders(site, bodyText = "") {
@@ -282,14 +283,7 @@ async function listMainPostsCached(site, options = {}) {
   const key = mainPostsListCacheKey(site, options);
   const now = Date.now();
   const cached = mainPostsListCache.get(key);
-
-  if (cached?.result && now - cached.at < MAIN_POSTS_LIST_CACHE_TTL_MS) {
-    return {
-      ...cached.result,
-      cached: true,
-      cachedAt: new Date(cached.at).toISOString(),
-    };
-  }
+  const force = Boolean(options.force);
 
   if (cached?.promise) {
     const result = await cached.promise;
@@ -297,6 +291,24 @@ async function listMainPostsCached(site, options = {}) {
       ...result,
       cached: true,
       shared: true,
+    };
+  }
+
+  if (cached?.result && (!force || now - cached.at < MAIN_POSTS_LIST_FORCE_COOLDOWN_MS)) {
+    return {
+      ...cached.result,
+      cached: true,
+      cachedAt: new Date(cached.at).toISOString(),
+      forced: false,
+      rateLimited: force,
+    };
+  }
+
+  if (cached?.result && now - cached.at < MAIN_POSTS_LIST_CACHE_TTL_MS) {
+    return {
+      ...cached.result,
+      cached: true,
+      cachedAt: new Date(cached.at).toISOString(),
     };
   }
 
@@ -366,10 +378,8 @@ export async function handleMainSitesRoute(request, response, pathname) {
 
   if (pathname === "/api/main-sites/list") {
     const site = getMainSite(body.siteId, { includeSecrets: true });
-    const options = { pageSize: body.pageSize, maxPages: body.maxPages };
-    const result = body.force
-      ? { ...(await listMainPosts(site, options)), cached: false, forced: true }
-      : await listMainPostsCached(site, options);
+    const options = { pageSize: body.pageSize, maxPages: body.maxPages, force: Boolean(body.force) };
+    const result = await listMainPostsCached(site, options);
     sendJson(response, 200, result);
     return true;
   }
