@@ -92,6 +92,7 @@ export function normalizeImportedKeywords(rows) {
         seedKeyword: getColumn(row, headers, "seedKeyword"),
         pageGroup: getColumn(row, headers, "pageGroup"),
         sourcePageType: getColumn(row, headers, "sourcePageType"),
+        serpFeatures: getColumn(row, headers, "serpFeatures"),
         volume: toNumber(getColumn(row, headers, "volume")),
         kd: toNumber(getColumn(row, headers, "difficulty")),
         intent: getColumn(row, headers, "intent") || "unknown",

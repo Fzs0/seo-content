@@ -407,14 +407,19 @@ export async function handleBlogSitesRoute(request, response, pathname) {
 
   if (pathname === "/api/blog-sites/upload") {
     const site = getBlogSite(body.siteId, { includeSecrets: true });
-    const result = await uploadArticles(site, [body.content || ""], {
+    const uploadBody = {
+      ...body,
+      imageKeywords: [body.imageKeyword || body.title || ""],
+    };
+    const contents = await enrichContentsForUpload([body.content || ""], uploadBody);
+    const result = await uploadArticles(site, contents, {
       status: body.status,
       author: body.author,
       categoryId: body.categoryId,
       coverUrl: body.coverUrl,
       slug: body.slug,
     });
-    sendJson(response, 200, result);
+    sendJson(response, 200, { ...result, imageWarnings: uploadBody.imageWarnings || [] });
     return true;
   }
 

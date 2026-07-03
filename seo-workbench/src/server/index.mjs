@@ -12,6 +12,7 @@ import { handleGoogleDataRoute } from "./routes/google-data.mjs";
 import { handleImagesRoute } from "./routes/images.mjs";
 
 import { handleMainSitesRoute } from "./routes/main-sites.mjs";
+import { handleProductsRoute } from "./routes/products.mjs";
 import { handleSiteSnapshotRoute } from "./routes/site-snapshot.mjs";
 import { handleTodosRoute } from "./routes/todos.mjs";
 import { handleWorkflowRoute } from "./routes/workflow.mjs";
@@ -164,6 +165,11 @@ export function createSeoWorkbenchServer() {
 
       if (url.pathname.startsWith("/api/main-sites")) {
         await handleMainSitesRoute(request, response, url.pathname);
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/products")) {
+        await handleProductsRoute(request, response, url.pathname);
         return;
       }
 

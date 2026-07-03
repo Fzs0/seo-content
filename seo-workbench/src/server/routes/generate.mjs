@@ -25,6 +25,10 @@ function systemMessageForStage(stage) {
     return "You are a senior Google SEO strategist. Review keyword allocation. When the user asks for JSON, return strict parseable JSON only.";
   }
 
+  if (stage === "productExtraction") {
+    return "You are a senior ecommerce SEO product taxonomy analyst. Extract product assets from raw API data. When the user asks for JSON, return strict parseable JSON only and do not invent products.";
+  }
+
   if (stage === "briefGeneration") {
     return "You are a senior Google SEO content strategist. Enhance the supplied local SEO brief without fabricating facts, rankings, traffic, SERP results, or product specs. Return the final Markdown brief only.";
   }
