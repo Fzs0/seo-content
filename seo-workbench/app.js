@@ -75,6 +75,8 @@ const contentHubLoadState = {
   sequence: 0,
 };
 
+const busyActionIds = new Set();
+
 const state = {
   project: {},
   standard: null,
@@ -115,8 +117,13 @@ const state = {
     selectedIds: [],
     activeOpportunity: null,
     generatedArticles: [],
+    lastBatchId: "",
+    lastBatchSiteKey: "",
+    lastBatchLabel: "",
     noMainOutboundLinks: true,
     showIncompatibleSites: false,
+    opportunityPage: 1,
+    opportunityPageSize: 25,
     lastSummary: null,
   },
   todos: [],
@@ -218,6 +225,46 @@ async function api(path, payload = null) {
 
 function requestId(prefix = "req") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function setActionEnabled(id, enabled, reason = "") {
+  const control = $(id);
+  if (!control) return;
+  const wasDisabled = control.classList.contains("is-disabled");
+  const isBusy = busyActionIds.has(id);
+  const shouldEnable = enabled && !isBusy;
+  control.disabled = !shouldEnable;
+  control.classList.toggle("is-disabled", !shouldEnable);
+  control.setAttribute("aria-disabled", shouldEnable ? "false" : "true");
+  if (isBusy) {
+    control.title = "正在处理，请稍等。";
+  } else if (!enabled && reason) {
+    control.title = reason;
+  } else if (enabled && wasDisabled) {
+    control.removeAttribute("title");
+  }
+}
+
+async function withButtonBusy(id, task) {
+  const button = $(id);
+  if (!button) return task();
+  const originalText = button.textContent;
+  busyActionIds.add(id);
+  button.disabled = true;
+  button.classList.add("is-busy");
+  button.textContent = "处理中...";
+  try {
+    return await task();
+  } finally {
+    busyActionIds.delete(id);
+    button.classList.remove("is-busy");
+    button.textContent = originalText;
+    updateActionStates();
+  }
+}
+
+function confirmAction(message) {
+  return window.confirm(message);
 }
 
 function readSelectOrCustom(selectId, customInputId) {
@@ -582,6 +629,7 @@ function setWpSiteForm(site = {}) {
   $("wpTargetLanguageInput").value = site.targetLanguage || "";
   $("wpContentRoleInput").value = site.contentRole || "博客A-知识教程";
   $("wpContentScopeInput").value = site.contentScope || "";
+  updateActionStates();
 }
 
 function renderWpSites() {
@@ -797,7 +845,7 @@ function renderDiagnosisView(containerId, markdown = "", options = {}) {
   if (!container) return;
   const content = String(markdown || "").trim();
   if (!content) {
-    container.innerHTML = `<div class="diagnosis-empty">${escapeHtml(options.emptyText || "暂无诊断结果。")}</div>`;
+    container.innerHTML = "";
     return;
   }
 
@@ -838,7 +886,7 @@ function renderPostInventory(containerId, posts = [], source = "wp", context = "
   const container = $(containerId);
   if (!container) return;
   if (!posts.length) {
-    container.innerHTML = `<div class="diagnosis-empty">还没有读取到文章。请先点击“读取文章列表”。</div>`;
+    container.innerHTML = "";
     return;
   }
 
@@ -1231,10 +1279,10 @@ function buildContentOpportunity(item = {}, source = contentSourceType(), posts 
   if (!roleMatch.compatible) return null;
 
   const base = keywordBaseScore(item);
-  const coverageScore = coverage.status === "未覆盖" ? 22 : coverage.status === "疑似覆盖" ? 4 : -30;
-  const priorityScore = item.priority === "P0" ? 12 : item.priority === "P1" ? 8 : item.priority === "P2" ? 3 : 0;
+  const coverageScore = coverage.status === "未覆盖" ? 16 : coverage.status === "疑似覆盖" ? 2 : -25;
+  const priorityScore = item.priority === "P0" ? 10 : item.priority === "P1" ? 7 : item.priority === "P2" ? 3 : 0;
   const fitScore = sourceFitScore(item, source) + roleMatch.strength * 4;
-  const finalScore = Math.max(0, Math.min(100, Math.round(base * 0.68 + coverageScore + priorityScore + fitScore)));
+  const finalScore = Math.max(0, Math.min(100, Math.round(base * 0.48 + coverageScore + priorityScore + fitScore * 0.65)));
   const action = coverage.status === "已覆盖" ? "更新旧文/补充段落" : coverage.status === "疑似覆盖" ? "先人工确认，再补强" : "新写文章";
   const internalLinks = findInternalLinkCandidates(item, posts, coverage);
   const sourceLabel = contentSourceLabel(site);
@@ -1306,6 +1354,8 @@ async function loadContentHubSitePosts({ autoPlan = true, force = false } = {}) 
     state.contentHub.opportunities = [];
     state.contentHub.selectedIds = [];
     state.contentHub.activeOpportunity = null;
+    state.contentHub.opportunityPage = 1;
+    state.contentHub.lastSummary = null;
     renderContentHub();
     $("contentHubStatus").textContent = "请先选择一个具体站点。";
     return;
@@ -1336,6 +1386,8 @@ async function loadContentHubSitePosts({ autoPlan = true, force = false } = {}) 
   state.contentHub.opportunities = [];
   state.contentHub.selectedIds = [];
   state.contentHub.activeOpportunity = null;
+  state.contentHub.opportunityPage = 1;
+  state.contentHub.lastSummary = null;
   renderContentHub();
   $("contentHubStatus").textContent = `正在读取 ${site.name} 的文章列表...`;
   const sequence = ++contentHubLoadState.sequence;
@@ -1408,7 +1460,7 @@ function planContentOpportunities() {
     $("contentHubStatus").textContent = "请先选择一个具体站点，再点击“读取/刷新文章”。";
     return;
   }
-  if (!posts.length) {
+  if (!contentHubPostsLoadedFor(site)) {
     $("contentHubStatus").textContent = `还没有读取到 ${site.name} 的文章。请点击“读取/刷新文章”。`;
     return;
   }
@@ -1419,6 +1471,7 @@ function planContentOpportunities() {
     .sort((a, b) => b.score - a.score);
 
   state.contentHub.opportunities = opportunities;
+  state.contentHub.opportunityPage = 1;
   state.contentHub.selectedIds = state.contentHub.selectedIds.filter((id) => opportunities.some((item) => item.id === id));
   state.contentHub.lastSummary = {
     source,
@@ -1432,6 +1485,78 @@ function planContentOpportunities() {
   };
   renderContentHub();
   saveWorkspaceDraft(`已为 ${site.name} 规划 ${opportunities.length} 个内容机会。`);
+}
+
+function contentHubPostsLoadedFor(site = selectedContentSite()) {
+  if (!site) return false;
+  return (
+    postsForContentSite().length > 0 ||
+    contentHubLoadState.lastLoadedKey === site.key ||
+    state.contentHub.lastSummary?.selectedSiteKey === site.key
+  );
+}
+
+async function ensureContentOpportunities() {
+  const site = selectedContentSite();
+  if (!site) {
+    $("contentHubStatus").textContent = "请先选择一个具体站点。";
+    return;
+  }
+  if (!state.keywords.length) {
+    $("contentHubStatus").textContent = "还没有关键词。请先导入 Semrush 关键词表，再生成机会池。";
+    return;
+  }
+
+  if (!contentHubPostsLoadedFor(site)) {
+    $("contentHubStatus").textContent = `正在先读取 ${site.name} 的文章，然后生成机会池...`;
+    await loadContentHubSitePosts({ autoPlan: true, force: false });
+    return;
+  }
+
+  planContentOpportunities();
+}
+
+function opportunityScoreBand(score = 0) {
+  if (score >= 85) return { className: "high", label: "强" };
+  if (score >= 70) return { className: "medium", label: "稳" };
+  if (score >= 55) return { className: "low", label: "待看" };
+  return { className: "weak", label: "低" };
+}
+
+function renderOpportunityScore(score = 0) {
+  const safeScore = Math.max(0, Math.min(100, Number(score || 0)));
+  const band = opportunityScoreBand(safeScore);
+  return `
+    <div class="opportunity-score ${band.className}" title="${safeScore}/100">
+      <strong>${safeScore}</strong>
+      <span>${band.label}</span>
+      <div class="score-bar compact"><span style="width:${safeScore}%"></span></div>
+    </div>
+  `;
+}
+
+function renderInternalLinkPlan(item = {}) {
+  const links = item.internalLinks || [];
+  const rule = item.nonMainRule || "按文章目的选择承接页。";
+  const visibleLinks = links.slice(0, 3);
+  const linkHtml = visibleLinks.length
+    ? visibleLinks
+        .map(
+          (link) => `
+            <span class="link-chip" title="${escapeHtml(link.url || "")}">
+              ${escapeHtml(link.anchor || link.title || "内部链接")}
+            </span>
+          `,
+        )
+        .join("")
+    : `<span class="link-empty">暂无强相关内链，写作时不要硬塞。</span>`;
+  const more = links.length > visibleLinks.length ? `<span class="link-more">+${links.length - visibleLinks.length} 条</span>` : "";
+  return `
+    <div class="link-plan">
+      <span class="link-rule">${escapeHtml(rule)}</span>
+      <div class="link-chip-row">${linkHtml}${more}</div>
+    </div>
+  `;
 }
 
 function renderContentHub() {
@@ -1450,13 +1575,15 @@ function renderContentHub() {
     state.contentHub.opportunities = [];
     state.contentHub.selectedIds = [];
     state.contentHub.activeOpportunity = null;
+    state.contentHub.opportunityPage = 1;
+    state.contentHub.lastSummary = null;
     site = null;
     renderContentSiteOptions();
   }
   const profile = site ? inferSiteProfile(site) : null;
   const posts = postsForContentSite();
   const opportunities = state.contentHub.opportunities || [];
-  const generatedForSite = (state.contentHub.generatedArticles || []).filter((article) => article.siteKey === site?.key);
+  const generatedForSite = latestGeneratedBatchForSelectedSite();
   const selectedSet = new Set(state.contentHub.selectedIds || []);
   const topReady = opportunities.filter((item) => selectedSet.has(item.id));
   $("contentHubSummary").innerHTML = [
@@ -1477,13 +1604,24 @@ function renderContentHub() {
 
   const body = $("contentOpportunityTableBody");
   body.innerHTML = "";
+  const pageSize = Number(state.contentHub.opportunityPageSize || 25);
+  const totalPages = Math.max(1, Math.ceil(opportunities.length / pageSize));
+  state.contentHub.opportunityPage = Math.min(Math.max(1, Number(state.contentHub.opportunityPage || 1)), totalPages);
+  const pageStart = (state.contentHub.opportunityPage - 1) * pageSize;
+  const visibleOpportunities = opportunities.slice(pageStart, pageStart + pageSize);
+  if ($("contentOpportunityPageSizeInput")) $("contentOpportunityPageSizeInput").value = String(pageSize);
+  if ($("contentOpportunityInfo")) {
+    $("contentOpportunityInfo").textContent = opportunities.length
+      ? `第 ${state.contentHub.opportunityPage} / ${totalPages} 页，显示 ${pageStart + 1}-${pageStart + visibleOpportunities.length}，共 ${opportunities.length} 个机会`
+      : "0 个机会";
+  }
+  if ($("prevOpportunityPageBtn")) $("prevOpportunityPageBtn").disabled = state.contentHub.opportunityPage <= 1;
+  if ($("nextOpportunityPageBtn")) $("nextOpportunityPageBtn").disabled = state.contentHub.opportunityPage >= totalPages;
+
   if (!opportunities.length) {
-    body.innerHTML = `<tr><td colspan="10">还没有机会池。先读取站点文章，再点击“分析文章并规划关键词”。</td></tr>`;
+    body.innerHTML = `<tr><td colspan="10">还没有机会池。点击“一键生成机会池”，系统会先读取文章，再结合关键词池规划内容机会。</td></tr>`;
   } else {
-    for (const item of opportunities.slice(0, 300)) {
-      const links = item.internalLinks?.length
-        ? item.internalLinks.map((link) => `${link.anchor} -> ${link.url}`).join("\n")
-        : "暂无强相关内链，写作时先不强塞。";
+    for (const item of visibleOpportunities) {
       const matched = item.matchedPosts?.length
         ? item.matchedPosts.map((post) => post.title).join(" / ")
         : "";
@@ -1496,8 +1634,8 @@ function renderContentHub() {
         <td>${escapeHtml(item.pageType)}</td>
         <td>${escapeHtml(item.action)}</td>
         <td><span class="badge ${item.priority === "P0" ? "main" : ""}">${escapeHtml(item.priority)}</span></td>
-        <td><div class="score-bar" title="${item.score}/100"><span style="width:${item.score}%"></span></div></td>
-        <td><pre class="mini-pre">${escapeHtml(`${item.nonMainRule}\n${links}`)}</pre></td>
+        <td>${renderOpportunityScore(item.score)}</td>
+        <td>${renderInternalLinkPlan(item)}</td>
         <td><button class="ghost-btn" data-use-opportunity="${escapeHtml(item.id)}">写这篇</button></td>
       `;
       body.appendChild(tr);
@@ -1527,6 +1665,7 @@ function renderContentHub() {
     : site
       ? `当前站点：${site.name}。系统不会自动请求远程文章；需要分析时请点击“读取/刷新文章”。`
       : "请先选择一个具体站点。";
+  updateActionStates();
 }
 
 function selectTopContentOpportunities() {
@@ -1890,6 +2029,7 @@ function setBlogSiteForm(site = {}) {
   $("blogTargetLanguageInput").value = site.targetLanguage || "";
   $("blogContentRoleInput").value = site.contentRole || "博客A-知识教程";
   $("blogContentScopeInput").value = site.contentScope || "";
+  updateActionStates();
 }
 
 function renderBlogSites() {
@@ -2091,6 +2231,7 @@ function setMainSiteForm(site = {}) {
   $("mainTargetLanguageInput").value = site.targetLanguage || "";
   $("mainContentRoleInput").value = site.contentRole || "主站-博客";
   $("mainContentScopeInput").value = site.contentScope || "";
+  updateActionStates();
 }
 
 function renderMainSites() {
@@ -2697,7 +2838,16 @@ function renderTable() {
     tr.addEventListener("click", () => selectKeyword(item.id));
     tr.querySelector("button").addEventListener("click", (event) => {
       event.stopPropagation();
-      selectKeyword(item.id).then(() => document.querySelector("#brief").scrollIntoView({ behavior: "smooth" }));
+      selectKeyword(item.id)
+        .then(() => {
+          applyActivePage("production");
+          history.replaceState(null, "", "#brief");
+          document.querySelector("#brief").scrollIntoView({ behavior: "smooth" });
+        })
+        .catch((error) => {
+          applyActivePage("production");
+          setArticleOutput(`生成 Brief 失败：${error.message}`);
+        });
     });
     body.appendChild(tr);
   }
@@ -2798,6 +2948,98 @@ function renderGeneration() {
       ? `已自动保存：${state.articleSave.relativePath}`
       : "生成后的文章会自动保存到 generated-articles/站点名/ 目录。";
   }
+  updateActionStates();
+}
+
+function hasConfiguredSiteApi() {
+  const siteApis = readProject().siteApis || {};
+  return Boolean(siteApis.mainPagesApi || siteApis.mainBlogApi || siteApis.blogApis?.length);
+}
+
+function generatedArticlesForSelectedContentSite() {
+  const site = selectedContentSite();
+  if (!site) return [];
+  return (state.contentHub.generatedArticles || []).filter((article) => article.siteKey === site.key);
+}
+
+function latestGeneratedBatchForSelectedSite() {
+  const site = selectedContentSite();
+  const batchId = String(state.contentHub.lastBatchId || "");
+  if (!site || !batchId || state.contentHub.lastBatchSiteKey !== site.key) return [];
+  return (state.contentHub.generatedArticles || []).filter(
+    (article) => article.siteKey === site.key && article.batchId === batchId,
+  );
+}
+
+function uploadableArticlesForLatestBatch() {
+  return latestGeneratedBatchForSelectedSite().filter(
+    (article) => !article.uploadedAt && (String(article.content || "").trim() || article.savedPath),
+  );
+}
+
+function createContentGenerationBatch(site = selectedContentSite()) {
+  const now = new Date();
+  const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "").replace("T", "-");
+  const sitePart = slugify(site?.name || "site").slice(0, 36) || "site";
+  const suffix = Math.random().toString(36).slice(2, 7);
+  const batchId = `${stamp}-${sitePart}-${suffix}`;
+  return {
+    batchId,
+    batchLabel: now.toLocaleString(),
+  };
+}
+
+function updateActionStates() {
+  const selected = selectedItem();
+  const hasKeywords = state.keywords.length > 0;
+  const hasSelectedKeyword = Boolean(selected);
+  const hasBrief = Boolean(state.brief?.trim());
+  const hasArticle = Boolean(state.article?.trim());
+  const contentSite = selectedContentSite();
+  const contentPosts = postsForContentSite();
+  const opportunities = state.contentHub.opportunities || [];
+  const selectedOpportunityCount = (state.contentHub.selectedIds || []).length;
+  const generatedForSite = uploadableArticlesForLatestBatch();
+
+  setActionEnabled("previewSiteApisBtn", hasConfiguredSiteApi(), "先在上方填写至少一个站点 API 地址。");
+  setActionEnabled("reanalyzeKeywordsBtn", hasKeywords, "先导入或粘贴关键词。");
+  setActionEnabled("clearKeywordsBtn", hasKeywords, "当前没有关键词可清空。");
+  setActionEnabled("exportCsvBtn", hasKeywords, "先导入关键词后再导出。");
+  setActionEnabled("exportCalendarBtn", hasKeywords, "先导入关键词，系统才有内容日历可导出。");
+  setActionEnabled("downloadStandardBtn", Boolean(state.standard), "SEO 标准还没有载入。");
+
+  setActionEnabled("copyBriefBtn", hasBrief, "先在关键词池选择一个关键词生成 Brief。");
+  setActionEnabled("buildPromptBtn", hasSelectedKeyword, "先在关键词池或内容中枢选择一个关键词。");
+  setActionEnabled("mockGenerateBtn", hasSelectedKeyword, "先选择一个关键词，系统会自动准备 Brief 和 Prompt。");
+  setActionEnabled("copyMetaBtn", hasArticle, "先生成文章。");
+  setActionEnabled("copyBodyBtn", hasArticle, "先生成文章。");
+  setActionEnabled("copyArticleBtn", hasArticle, "先生成文章。");
+  setActionEnabled("downloadArticleBtn", hasArticle, "先生成文章。");
+
+  setActionEnabled("loadContentSitePostsBtn", Boolean(contentSite), "先选择要分析的站点。");
+  setActionEnabled("planContentOpportunitiesBtn", Boolean(contentSite && hasKeywords), "先选择站点并导入关键词。");
+  setActionEnabled("selectTopOpportunitiesBtn", opportunities.length > 0, "先生成内容机会池。");
+  setActionEnabled("clearOpportunitySelectionBtn", selectedOpportunityCount > 0, "当前没有勾选机会。");
+  setActionEnabled("batchGenerateSelectedBtn", selectedOpportunityCount > 0, "先在内容机会池勾选要生成的关键词。");
+  setActionEnabled("batchUploadGeneratedBtn", Boolean(contentSite && generatedForSite.length), "先为当前站点批量生成文章。");
+
+  setActionEnabled("listWpPostsBtn", Boolean(state.selectedWpSiteId), "先保存或选择一个 WordPress 站点。");
+  setActionEnabled("aiDiagnoseWpPostsBtn", Boolean(state.selectedWpSiteId), "先保存或选择一个 WordPress 站点。");
+  setActionEnabled("getWpPostBtn", Boolean(state.selectedWpSiteId), "先保存或选择一个 WordPress 站点。");
+  setActionEnabled("deleteWpSiteBtn", Boolean(state.selectedWpSiteId), "当前是新建配置，没有可删除站点。");
+  setActionEnabled("uploadCurrentArticleBtn", Boolean(state.selectedWpSiteId && hasArticle), "先选择 WordPress 站点并生成文章。");
+
+  setActionEnabled("listBlogPostsBtn", Boolean(state.selectedBlogSiteId), "先保存或选择一个自建博客站点。");
+  setActionEnabled("aiDiagnoseBlogPostsBtn", Boolean(state.selectedBlogSiteId), "先保存或选择一个自建博客站点。");
+  setActionEnabled("getBlogPostBtn", Boolean(state.selectedBlogSiteId), "先保存或选择一个自建博客站点。");
+  setActionEnabled("uploadBlogMarkdownFilesBtn", Boolean(state.selectedBlogSiteId), "先保存或选择一个自建博客站点。");
+  setActionEnabled("deleteBlogSiteBtn", Boolean(state.selectedBlogSiteId), "当前是新建配置，没有可删除站点。");
+  setActionEnabled("uploadCurrentBlogArticleBtn", Boolean(state.selectedBlogSiteId && hasArticle), "先选择自建博客站点并生成文章。");
+
+  setActionEnabled("listMainPostsBtn", Boolean(state.selectedMainSiteId), "先保存或选择一个主站 OpenAPI 配置。");
+  setActionEnabled("aiDiagnoseMainPostsBtn", Boolean(state.selectedMainSiteId), "先保存或选择一个主站 OpenAPI 配置。");
+  setActionEnabled("deleteMainSiteBtn", Boolean(state.selectedMainSiteId), "当前是新建配置，没有可删除主站。");
+  setActionEnabled("uploadCurrentMainArticleBtn", Boolean(state.selectedMainSiteId && hasArticle), "先选择主站 OpenAPI 配置并生成文章。");
 }
 
 function renderTodos() {
@@ -3274,6 +3516,7 @@ function renderAll() {
   renderGoogleDataSources();
   renderTodos();
   applyActivePage(state.activePage);
+  updateActionStates();
 }
 
 async function loadStandard() {
@@ -3735,7 +3978,7 @@ async function ensureArticlePrompt(item) {
   $("promptOutput").value = state.prompt;
 }
 
-async function saveGeneratedArticleToServer(item) {
+async function saveGeneratedArticleToServer(item, options = {}) {
   if (!state.article?.trim() || !item) return null;
 
   const saveContext = articleSaveContextFor(item);
@@ -3746,6 +3989,7 @@ async function saveGeneratedArticleToServer(item) {
     siteName: articleSiteNameFor(saveContext),
     keyword: saveContext,
     project: articleGenerationProject(),
+    batchId: options.batchId || "",
   });
 
   state.articleSave = data;
@@ -3755,7 +3999,7 @@ async function saveGeneratedArticleToServer(item) {
   return data;
 }
 
-function rememberGeneratedArticle(item, saveData = state.articleSave) {
+function rememberGeneratedArticle(item, saveData = state.articleSave, options = {}) {
   const opportunity = activeOpportunityForItem(item);
   if (!opportunity || !state.article?.trim()) return null;
 
@@ -3772,6 +4016,8 @@ function rememberGeneratedArticle(item, saveData = state.articleSave) {
     siteRole: opportunity.siteRole || "",
     siteMarket: opportunity.siteMarket || "",
     siteLanguage: opportunity.siteLanguage || "",
+    batchId: options.batchId || saveData?.batchId || "",
+    batchLabel: options.batchLabel || "",
     savedPath: saveData?.relativePath || "",
     content: state.article,
     createdAt: new Date().toISOString(),
@@ -3779,16 +4025,19 @@ function rememberGeneratedArticle(item, saveData = state.articleSave) {
 
   const articles = state.contentHub.generatedArticles || [];
   state.contentHub.generatedArticles = [
-    ...articles.filter((article) => article.opportunityId !== record.opportunityId),
+    ...articles.filter(
+      (article) => !(article.opportunityId === record.opportunityId && article.batchId === record.batchId),
+    ),
     record,
   ];
   return record;
 }
 
-async function generateArticle() {
+async function generateArticle(options = {}) {
   const item = selectedItem();
   if (!item) return;
 
+  state.articleSave = null;
   await ensureArticlePrompt(item);
   const stageKey = $("articleStageInput").value;
   const stage = state.aiStages[stageKey] || state.aiStages.articleGeneration;
@@ -3802,8 +4051,8 @@ async function generateArticle() {
     state.article = data.content || "";
     renderGeneration();
     try {
-      const saveData = await saveGeneratedArticleToServer(item);
-      rememberGeneratedArticle(item, saveData);
+      const saveData = await saveGeneratedArticleToServer(item, options);
+      rememberGeneratedArticle(item, saveData, options);
       saveWorkspaceDraft("文章草稿已自动保存到本机浏览器和本地 Markdown 目录。");
     } catch (error) {
       $("articleSaveStatus").textContent = `文章已生成，但保存到本地目录失败：${error.message}`;
@@ -3832,8 +4081,8 @@ async function generateArticle() {
   state.article = data.content || data.text || JSON.stringify(data, null, 2);
   renderGeneration();
   try {
-    const saveData = await saveGeneratedArticleToServer(item);
-    rememberGeneratedArticle(item, saveData);
+    const saveData = await saveGeneratedArticleToServer(item, options);
+    rememberGeneratedArticle(item, saveData, options);
     saveWorkspaceDraft("文章草稿已自动保存到本机浏览器和本地 Markdown 目录。");
   } catch (error) {
     $("articleSaveStatus").textContent = `文章已生成，但保存到本地目录失败：${error.message}`;
@@ -3849,13 +4098,19 @@ async function batchGenerateSelectedOpportunities() {
     return;
   }
 
-  const selectedOpportunityIds = new Set(opportunities.map((item) => item.id));
-  state.contentHub.generatedArticles = (state.contentHub.generatedArticles || []).filter(
-    (article) => !selectedOpportunityIds.has(article.opportunityId),
-  );
+  const site = selectedContentSite();
+  if (!site) {
+    $("contentHubStatus").textContent = "请先选择本次要生成文章的站点。";
+    return;
+  }
+
+  const batch = createContentGenerationBatch(site);
+  state.contentHub.lastBatchId = batch.batchId;
+  state.contentHub.lastBatchSiteKey = site.key;
+  state.contentHub.lastBatchLabel = batch.batchLabel;
 
   const log = [];
-  $("batchGenerationLog").textContent = `准备批量生成 ${opportunities.length} 篇文章...\n`;
+  $("batchGenerationLog").textContent = `准备批量生成 ${opportunities.length} 篇文章。\n批次：${batch.batchId}\n目录：generated-articles/${site.name}/${batch.batchId}/\n`;
   for (let index = 0; index < opportunities.length; index += 1) {
     const opportunity = opportunities[index];
     const keyword = state.keywords.find((item) => item.id === opportunity.keywordId);
@@ -3870,7 +4125,7 @@ async function batchGenerateSelectedOpportunities() {
       state.selectedId = keyword.id;
       $("contentHubStatus").textContent = `正在生成 ${index + 1}/${opportunities.length}：${opportunity.keyword}`;
       await refreshSelected();
-      await generateArticle();
+      await generateArticle(batch);
       const savedPath = state.articleSave?.relativePath ? ` -> ${state.articleSave.relativePath}` : "";
       log.push(`[完成] ${opportunity.keyword}${savedPath}`);
     } catch (error) {
@@ -3891,14 +4146,17 @@ async function uploadGeneratedArticlesToContentSite() {
     return;
   }
 
-  if (site.type !== "blog") {
+  if (!["blog", "wp"].includes(site.type)) {
     $("contentHubStatus").textContent = "当前一键批量导入先支持自建博客后台站点。WordPress/主站批量导入会走各自接口单独适配。";
     return;
   }
 
-  const generated = (state.contentHub.generatedArticles || []).filter(
-    (article) => article.siteKey === site.key && (String(article.content || "").trim() || article.savedPath),
-  );
+  if (!state.contentHub.lastBatchId || state.contentHub.lastBatchSiteKey !== site.key) {
+    $("contentHubStatus").textContent = `当前没有 ${site.name} 的最新批量生成记录。请先在内容中枢批量生成文章。`;
+    return;
+  }
+
+  const generated = uploadableArticlesForLatestBatch();
   if (!generated.length) {
     $("contentHubStatus").textContent = `当前没有可导入到 ${site.name} 的生成稿。请先在内容中枢批量生成文章。`;
     return;
@@ -3911,10 +4169,15 @@ async function uploadGeneratedArticlesToContentSite() {
     `[导入] 准备上传 ${generated.length} 篇到 ${site.name}。`,
   ].filter(Boolean).join("\n");
 
-  const data = await api("/api/blog-sites/batch-upload", {
+  const uploadEndpoint = site.type === "wp" ? "/api/wp-sites/batch-upload" : "/api/blog-sites/batch-upload";
+  const data = await api(uploadEndpoint, {
     siteId: site.id,
     contents: generated.map((article) => article.content),
     relativePaths: generated.map((article) => article.savedPath || ""),
+    enrichImages: true,
+    imageProvider: "auto",
+    maxImagesPerArticle: 2,
+    imageKeywords: generated.map((article) => article.keyword || article.title || ""),
     override: {
       status: site.defaultStatus || "draft",
       author: site.defaultAuthor || "Admin",
@@ -3938,6 +4201,9 @@ async function uploadGeneratedArticlesToContentSite() {
 
   $("batchGenerationLog").textContent = [
     $("batchGenerationLog").textContent || "",
+    ...(Array.isArray(data.imageWarnings) && data.imageWarnings.length
+      ? [`[图片提示] ${data.imageWarnings.slice(0, 5).join("；")}${data.imageWarnings.length > 5 ? "；..." : ""}`]
+      : []),
     failedCount
       ? `[导入完成] 提交 ${data.requested} 篇，成功 ${createdCount} 篇，失败 ${failedCount} 篇。`
       : `[导入完成] 成功提交 ${data.requested} 篇到 ${site.name}。`,
@@ -4158,7 +4424,9 @@ function bindEvents() {
     button.addEventListener("click", () => applyProjectPreset(button.dataset.projectPreset));
   });
   $("previewSiteApisBtn").addEventListener("click", () =>
-    previewSiteApis().catch((error) => ($("siteApiPreview").textContent = `抓取失败：${error.message}`)),
+    withButtonBusy("previewSiteApisBtn", () =>
+      previewSiteApis().catch((error) => ($("siteApiPreview").textContent = `抓取失败：${error.message}`)),
+    ),
   );
 
   $("standardEditor").addEventListener("input", () => {
@@ -4166,23 +4434,36 @@ function bindEvents() {
     $("standardStatus").textContent = "标准有未保存修改。保存后才会写入流程。";
   });
   $("reloadStandardBtn").addEventListener("click", () =>
-    reloadStandardFromDisk().catch((error) => ($("standardStatus").textContent = `重新读取失败：${error.message}`)),
+    withButtonBusy("reloadStandardBtn", () =>
+      reloadStandardFromDisk().catch((error) => ($("standardStatus").textContent = `重新读取失败：${error.message}`)),
+    ),
   );
-  $("saveStandardBtn").addEventListener("click", () => saveStandardFromEditor().catch((error) => ($("standardStatus").textContent = `保存失败：${error.message}`)));
+  $("saveStandardBtn").addEventListener("click", () =>
+    withButtonBusy("saveStandardBtn", () =>
+      saveStandardFromEditor().catch((error) => ($("standardStatus").textContent = `保存失败：${error.message}`)),
+    ),
+  );
   $("downloadStandardBtn").addEventListener("click", () => {
     downloadFile("seo-standard.json", JSON.stringify(state.standard || {}, null, 2), "application/json;charset=utf-8");
   });
-  $("importFileBtn").addEventListener("click", () => importFile().catch((error) => ($("importStatus").textContent = `导入失败：${error.message}`)));
+  $("importFileBtn").addEventListener("click", () =>
+    withButtonBusy("importFileBtn", () => importFile().catch((error) => ($("importStatus").textContent = `导入失败：${error.message}`))),
+  );
   $("keywordFileInput").addEventListener("change", () => {
     if ($("keywordFileInput").files?.[0]) {
       importFile().catch((error) => ($("importStatus").textContent = `导入失败：${error.message}`));
     }
   });
-  $("parseCsvBtn").addEventListener("click", () => importCsv().catch((error) => ($("importStatus").textContent = `解析失败：${error.message}`)));
+  $("parseCsvBtn").addEventListener("click", () =>
+    withButtonBusy("parseCsvBtn", () => importCsv().catch((error) => ($("importStatus").textContent = `解析失败：${error.message}`))),
+  );
   $("reanalyzeKeywordsBtn").addEventListener("click", () =>
-    reanalyzeCurrentKeywords().catch((error) => ($("importStatus").textContent = `重新分析失败：${error.message}`)),
+    withButtonBusy("reanalyzeKeywordsBtn", () =>
+      reanalyzeCurrentKeywords().catch((error) => ($("importStatus").textContent = `重新分析失败：${error.message}`)),
+    ),
   );
   $("clearKeywordsBtn").addEventListener("click", () => {
+    if (!confirmAction(`确定要清空当前 ${state.keywords.length} 个关键词吗？这会同时清空当前 Brief、Prompt 和生成结果。`)) return;
     state.keywords = [];
     state.selectedId = null;
     state.tablePage = 1;
@@ -4203,7 +4484,7 @@ function bindEvents() {
     }, 1200);
   });
   $("saveAiConfigBtn").addEventListener("click", () => {
-    saveAiStagesToServer().catch((error) => {
+    withButtonBusy("saveAiConfigBtn", () => saveAiStagesToServer()).catch((error) => {
       const message = `AI 配置保存失败：${error.message}。请确认你是通过 http://localhost:5177 打开页面，并且 npm start 正在运行。`;
       $("aiConfigStatus").textContent = message;
       setArticleOutput(message);
@@ -4212,18 +4493,22 @@ function bindEvents() {
   $("applyDeepSeekAllBtn").addEventListener("click", applyDeepSeekToAllStages);
   $("applyDeepSeekKeyBtn").addEventListener("click", applyDeepSeekKeyToAllStages);
   $("resetAiConfigBtn").addEventListener("click", () => {
+    if (!confirmAction("确定要把 AI 阶段路由恢复为默认值吗？保存到服务端前不会覆盖配置文件，但页面里的当前修改会被重置。")) return;
     state.aiStages = mergeAiStages({});
     renderAll();
     $("aiConfigStatus").textContent = "已恢复默认 AI 阶段配置。点击“保存到服务端”后才会覆盖本地配置文件。";
     setArticleOutput("已恢复默认 AI 阶段配置。点击“保存到服务端”后才会覆盖本地配置文件。");
   });
-  $("aiReviewKeywordsBtn").addEventListener("click", () => aiReviewKeywords().catch((error) => setArticleOutput(`AI 复核失败：${error.message}`)));
-  $("buildPromptBtn").addEventListener("click", () => refreshSelected().catch((error) => setArticleOutput(error.message)));
+  $("buildPromptBtn").addEventListener("click", () =>
+    withButtonBusy("buildPromptBtn", () => refreshSelected().catch((error) => setArticleOutput(error.message))),
+  );
   $("promptOutput").addEventListener("input", () => {
     state.prompt = $("promptOutput").value;
     saveWorkspaceDraft();
   });
-  $("mockGenerateBtn").addEventListener("click", () => generateArticle().catch((error) => setArticleOutput(`生成失败：${error.message}`)));
+  $("mockGenerateBtn").addEventListener("click", () =>
+    withButtonBusy("mockGenerateBtn", () => generateArticle().catch((error) => setArticleOutput(`生成失败：${error.message}`))),
+  );
   $("copyMetaBtn").addEventListener("click", async () => {
     const content = state.articleParts?.meta || $("articleMetaOutput").textContent || "";
     await copyText(content);
@@ -4269,28 +4554,35 @@ function bindEvents() {
     $("wpSiteUrlInput").value = normalizeWpSiteUrl($("wpSiteUrlInput").value);
   });
   $("saveWpSiteBtn").addEventListener("click", () =>
-    saveWpSiteFromForm().catch((error) => ($("wpPublishStatus").textContent = `保存失败：${error.message}`)),
+    withButtonBusy("saveWpSiteBtn", () => saveWpSiteFromForm().catch((error) => ($("wpPublishStatus").textContent = `保存失败：${error.message}`))),
   );
   $("testWpSiteBtn").addEventListener("click", () =>
-    testWpSiteConnection().catch((error) => ($("wpPublishStatus").textContent = `连接失败：${error.message}`)),
+    withButtonBusy("testWpSiteBtn", () => testWpSiteConnection().catch((error) => ($("wpPublishStatus").textContent = `连接失败：${error.message}`))),
   );
   $("diagnoseWpSiteBtn").addEventListener("click", () =>
-    diagnoseWpSiteConnection().catch((error) => ($("wpPublishStatus").textContent = `诊断失败：${error.message}`)),
+    withButtonBusy("diagnoseWpSiteBtn", () =>
+      diagnoseWpSiteConnection().catch((error) => ($("wpPublishStatus").textContent = `诊断失败：${error.message}`)),
+    ),
   );
   $("listWpPostsBtn").addEventListener("click", () =>
-    listWpPosts().catch((error) => ($("wpPublishStatus").textContent = `读取文章列表失败：${error.message}`)),
+    withButtonBusy("listWpPostsBtn", () => listWpPosts().catch((error) => ($("wpPublishStatus").textContent = `读取文章列表失败：${error.message}`))),
   );
   $("getWpPostBtn").addEventListener("click", () =>
-    getWpPost().catch((error) => ($("wpPublishStatus").textContent = `读取单篇文章失败：${error.message}`)),
+    withButtonBusy("getWpPostBtn", () => getWpPost().catch((error) => ($("wpPublishStatus").textContent = `读取单篇文章失败：${error.message}`))),
   );
   $("aiDiagnoseWpPostsBtn").addEventListener("click", () =>
-    aiDiagnoseWpPosts().catch((error) => ($("wpPublishStatus").textContent = `AI 诊断失败：${error.message}`)),
+    withButtonBusy("aiDiagnoseWpPostsBtn", () =>
+      aiDiagnoseWpPosts().catch((error) => ($("wpPublishStatus").textContent = `AI 诊断失败：${error.message}`)),
+    ),
   );
   $("deleteWpSiteBtn").addEventListener("click", () =>
+    confirmAction("确定要删除当前 WordPress 站点配置吗？这只删除本地配置，不会删除远程站点。") &&
     deleteCurrentWpSite().catch((error) => ($("wpPublishStatus").textContent = `删除失败：${error.message}`)),
   );
   $("uploadCurrentArticleBtn").addEventListener("click", () =>
-    uploadCurrentArticleToWp().catch((error) => ($("wpPublishStatus").textContent = `上传失败：${error.message}`)),
+    withButtonBusy("uploadCurrentArticleBtn", () =>
+      uploadCurrentArticleToWp().catch((error) => ($("wpPublishStatus").textContent = `上传失败：${error.message}`)),
+    ),
   );
   $("blogSiteSelect").addEventListener("change", () => {
     const site = state.blogSites.find((item) => item.id === $("blogSiteSelect").value);
@@ -4300,28 +4592,35 @@ function bindEvents() {
     $("blogApiBaseUrlInput").value = normalizeBlogApiBaseUrl($("blogApiBaseUrlInput").value);
   });
   $("saveBlogSiteBtn").addEventListener("click", () =>
-    saveBlogSiteFromForm().catch((error) => ($("blogPublishStatus").textContent = `保存失败：${error.message}`)),
+    withButtonBusy("saveBlogSiteBtn", () => saveBlogSiteFromForm().catch((error) => ($("blogPublishStatus").textContent = `保存失败：${error.message}`))),
   );
   $("testBlogSiteBtn").addEventListener("click", () =>
-    testBlogSiteConnection().catch((error) => ($("blogPublishStatus").textContent = `连接失败：${error.message}`)),
+    withButtonBusy("testBlogSiteBtn", () => testBlogSiteConnection().catch((error) => ($("blogPublishStatus").textContent = `连接失败：${error.message}`))),
   );
   $("deleteBlogSiteBtn").addEventListener("click", () =>
+    confirmAction("确定要删除当前自建博客站点配置吗？这只删除本地配置，不会删除远程站点。") &&
     deleteCurrentBlogSite().catch((error) => ($("blogPublishStatus").textContent = `删除失败：${error.message}`)),
   );
   $("listBlogPostsBtn").addEventListener("click", () =>
-    listBlogPosts().catch((error) => ($("blogPublishStatus").textContent = `读取列表失败：${error.message}`)),
+    withButtonBusy("listBlogPostsBtn", () => listBlogPosts().catch((error) => ($("blogPublishStatus").textContent = `读取列表失败：${error.message}`))),
   );
   $("aiDiagnoseBlogPostsBtn").addEventListener("click", () =>
-    aiDiagnoseBlogPosts().catch((error) => ($("blogPublishStatus").textContent = `AI 诊断失败：${error.message}`)),
+    withButtonBusy("aiDiagnoseBlogPostsBtn", () =>
+      aiDiagnoseBlogPosts().catch((error) => ($("blogPublishStatus").textContent = `AI 诊断失败：${error.message}`)),
+    ),
   );
   $("getBlogPostBtn").addEventListener("click", () =>
-    getBlogPost().catch((error) => ($("blogPublishStatus").textContent = `读取文章失败：${error.message}`)),
+    withButtonBusy("getBlogPostBtn", () => getBlogPost().catch((error) => ($("blogPublishStatus").textContent = `读取文章失败：${error.message}`))),
   );
   $("uploadCurrentBlogArticleBtn").addEventListener("click", () =>
-    uploadCurrentArticleToBlog().catch((error) => ($("blogPublishStatus").textContent = `上传失败：${error.message}`)),
+    withButtonBusy("uploadCurrentBlogArticleBtn", () =>
+      uploadCurrentArticleToBlog().catch((error) => ($("blogPublishStatus").textContent = `上传失败：${error.message}`)),
+    ),
   );
   $("uploadBlogMarkdownFilesBtn").addEventListener("click", () =>
-    uploadMarkdownFilesToBlog().catch((error) => ($("blogPublishStatus").textContent = `批量上传失败：${error.message}`)),
+    withButtonBusy("uploadBlogMarkdownFilesBtn", () =>
+      uploadMarkdownFilesToBlog().catch((error) => ($("blogPublishStatus").textContent = `批量上传失败：${error.message}`)),
+    ),
   );
   $("mainSiteSelect").addEventListener("change", () => {
     const site = state.mainSites.find((item) => item.id === $("mainSiteSelect").value);
@@ -4331,22 +4630,29 @@ function bindEvents() {
     $("mainApiBaseUrlInput").value = $("mainApiBaseUrlInput").value.trim().replace(/\/+$/g, "").replace(/\/posts$/i, "");
   });
   $("saveMainSiteBtn").addEventListener("click", () =>
-    saveMainSiteFromForm().catch((error) => ($("mainPublishStatus").textContent = `保存失败：${error.message}`)),
+    withButtonBusy("saveMainSiteBtn", () => saveMainSiteFromForm().catch((error) => ($("mainPublishStatus").textContent = `保存失败：${error.message}`))),
   );
   $("testMainSiteBtn").addEventListener("click", () =>
-    testMainSiteConnection().catch((error) => ($("mainPublishStatus").textContent = `连接失败：${error.message}`)),
+    withButtonBusy("testMainSiteBtn", () => testMainSiteConnection().catch((error) => ($("mainPublishStatus").textContent = `连接失败：${error.message}`))),
   );
   $("deleteMainSiteBtn").addEventListener("click", () =>
+    confirmAction("确定要删除当前主站 OpenAPI 配置吗？这只删除本地配置，不会删除远程站点。") &&
     deleteCurrentMainSite().catch((error) => ($("mainPublishStatus").textContent = `删除失败：${error.message}`)),
   );
   $("listMainPostsBtn").addEventListener("click", () =>
-    listMainPosts({ force: true }).catch((error) => ($("mainPublishStatus").textContent = `读取列表失败：${error.message}`)),
+    withButtonBusy("listMainPostsBtn", () =>
+      listMainPosts({ force: true }).catch((error) => ($("mainPublishStatus").textContent = `读取列表失败：${error.message}`)),
+    ),
   );
   $("aiDiagnoseMainPostsBtn").addEventListener("click", () =>
-    aiDiagnoseMainPosts().catch((error) => ($("mainPublishStatus").textContent = `AI 诊断失败：${error.message}`)),
+    withButtonBusy("aiDiagnoseMainPostsBtn", () =>
+      aiDiagnoseMainPosts().catch((error) => ($("mainPublishStatus").textContent = `AI 诊断失败：${error.message}`)),
+    ),
   );
   $("uploadCurrentMainArticleBtn").addEventListener("click", () =>
-    uploadCurrentArticleToMain().catch((error) => ($("mainPublishStatus").textContent = `上传失败：${error.message}`)),
+    withButtonBusy("uploadCurrentMainArticleBtn", () =>
+      uploadCurrentArticleToMain().catch((error) => ($("mainPublishStatus").textContent = `上传失败：${error.message}`)),
+    ),
   );
   $("contentSiteSelect").addEventListener("change", () => {
     state.contentHub.selectedSiteKey = $("contentSiteSelect").value;
@@ -4355,6 +4661,8 @@ function bindEvents() {
     state.contentHub.opportunities = [];
     state.contentHub.selectedIds = [];
     state.contentHub.activeOpportunity = null;
+    state.contentHub.opportunityPage = 1;
+    state.contentHub.lastSummary = null;
     contentHubLoadState.lastLoadedKey = "";
     contentHubLoadState.lastLoadedAt = 0;
     renderContentHub();
@@ -4375,20 +4683,46 @@ function bindEvents() {
     saveWorkspaceDraft();
   });
   $("loadContentSitePostsBtn").addEventListener("click", () =>
-    (() => {
-      contentHubLoadState.lastLoadedKey = "";
-      contentHubLoadState.lastLoadedAt = 0;
-      return loadContentHubSitePosts({ autoPlan: true, force: true });
-    })().catch((error) => ($("contentHubStatus").textContent = `读取文章失败：${error.message}`)),
+    withButtonBusy("loadContentSitePostsBtn", () =>
+      (() => {
+        contentHubLoadState.lastLoadedKey = "";
+        contentHubLoadState.lastLoadedAt = 0;
+        return loadContentHubSitePosts({ autoPlan: true, force: true });
+      })().catch((error) => ($("contentHubStatus").textContent = `读取文章失败：${error.message}`)),
+    ),
   );
-  $("planContentOpportunitiesBtn").addEventListener("click", () => planContentOpportunities());
+  $("planContentOpportunitiesBtn").addEventListener("click", () =>
+    withButtonBusy("planContentOpportunitiesBtn", () =>
+      ensureContentOpportunities().catch((error) => ($("contentHubStatus").textContent = `生成机会池失败：${error.message}`)),
+    ),
+  );
+  $("contentOpportunityPageSizeInput").addEventListener("change", () => {
+    state.contentHub.opportunityPageSize = Number($("contentOpportunityPageSizeInput").value) || 25;
+    state.contentHub.opportunityPage = 1;
+    renderContentHub();
+    saveWorkspaceDraft();
+  });
+  $("prevOpportunityPageBtn").addEventListener("click", () => {
+    state.contentHub.opportunityPage = Math.max(1, Number(state.contentHub.opportunityPage || 1) - 1);
+    renderContentHub();
+    saveWorkspaceDraft();
+  });
+  $("nextOpportunityPageBtn").addEventListener("click", () => {
+    state.contentHub.opportunityPage = Number(state.contentHub.opportunityPage || 1) + 1;
+    renderContentHub();
+    saveWorkspaceDraft();
+  });
   $("selectTopOpportunitiesBtn").addEventListener("click", selectTopContentOpportunities);
   $("clearOpportunitySelectionBtn").addEventListener("click", clearContentOpportunitySelection);
   $("batchGenerateSelectedBtn").addEventListener("click", () =>
-    batchGenerateSelectedOpportunities().catch((error) => ($("contentHubStatus").textContent = `批量生成失败：${error.message}`)),
+    withButtonBusy("batchGenerateSelectedBtn", () =>
+      batchGenerateSelectedOpportunities().catch((error) => ($("contentHubStatus").textContent = `批量生成失败：${error.message}`)),
+    ),
   );
   $("batchUploadGeneratedBtn").addEventListener("click", () =>
-    uploadGeneratedArticlesToContentSite().catch((error) => ($("contentHubStatus").textContent = `批量导入失败：${error.message}`)),
+    withButtonBusy("batchUploadGeneratedBtn", () =>
+      uploadGeneratedArticlesToContentSite().catch((error) => ($("contentHubStatus").textContent = `批量导入失败：${error.message}`)),
+    ),
   );
   $("googleDataSourceSelect").addEventListener("change", () => {
     state.selectedGoogleDataSourceId = $("googleDataSourceSelect").value;

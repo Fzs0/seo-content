@@ -47,8 +47,9 @@ export async function handleArticlesRoute(request, response) {
   }
 
   const siteName = sanitizePathPart(body.siteName || body.keyword?.assignedSite || "未分配站点", "未分配站点");
+  const batchId = sanitizePathPart(body.batchId || "", "");
   const filename = `${slugify(body.slug || body.keyword?.keyword || "seo-article")}.md`;
-  const directory = safeTarget(articlesRoot, siteName);
+  const directory = batchId ? safeTarget(articlesRoot, siteName, batchId) : safeTarget(articlesRoot, siteName);
   const target = safeTarget(directory, filename);
 
   await mkdir(directory, { recursive: true });
@@ -57,8 +58,11 @@ export async function handleArticlesRoute(request, response) {
   sendJson(response, 200, {
     ok: true,
     siteName,
+    batchId,
     filename,
-    relativePath: `generated-articles/${siteName}/${filename}`,
+    relativePath: batchId
+      ? `generated-articles/${siteName}/${batchId}/${filename}`
+      : `generated-articles/${siteName}/${filename}`,
     absolutePath: target,
     savedAt: new Date().toISOString(),
   });

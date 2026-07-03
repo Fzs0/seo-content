@@ -1,5 +1,12 @@
+import { readFile } from "node:fs/promises";
+import { join, normalize } from "node:path";
+import { fileURLToPath } from "node:url";
 import { deleteWpSite, getWpSite, normalizeSiteUrl, readWpSites, saveWpSite } from "../wp-sites-store.mjs";
 import { methodNotAllowed, readJson, sendJson } from "../http.mjs";
+import { enrichMarkdownWithImages } from "./images.mjs";
+
+const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const generatedArticlesRoot = normalize(join(projectRoot, "generated-articles"));
 
 function authHeader(site) {
   const token = Buffer.from(`${site.username}:${site.applicationPassword}`, "utf8").toString("base64");
@@ -589,7 +596,7 @@ async function uploadArticle(site, content, override = {}) {
   const status = override.status || site.defaultStatus || "draft";
   const categoryId = override.categoryId || site.defaultCategoryId || "";
   const payload = {
-    title: meta.title,
+    title: override.title || meta.title,
     content: markdownToWpBlocks(meta.body, { stripLeadingH1: true }),
     status,
     slug: override.slug || meta.slug || undefined,
@@ -617,6 +624,100 @@ async function uploadArticle(site, content, override = {}) {
       description: meta.metaDescription,
       focusKeyword: payload.meta?.rank_math_focus_keyword || "",
     },
+  };
+}
+
+function safeGeneratedArticlePath(relativePath = "") {
+  const normalizedRelative = String(relativePath || "").replace(/\\/g, "/").replace(/^\/+/, "");
+  if (!normalizedRelative.startsWith("generated-articles/")) {
+    throw new Error(`不是允许读取的生成文章路径：${relativePath}`);
+  }
+
+  const target = normalize(join(projectRoot, normalizedRelative));
+  if (!target.startsWith(generatedArticlesRoot)) {
+    throw new Error("生成文章读取路径越界。");
+  }
+  return target;
+}
+
+async function uploadContentsFromBody(body = {}) {
+  const contents = Array.isArray(body.contents) ? body.contents : [];
+  const relativePaths = Array.isArray(body.relativePaths) ? body.relativePaths : [];
+  const maxLength = Math.max(contents.length, relativePaths.length);
+
+  const resolved = [];
+  for (let index = 0; index < maxLength; index += 1) {
+    const inlineContent = String(contents[index] || "");
+    if (inlineContent.trim()) {
+      resolved.push(inlineContent);
+      continue;
+    }
+
+    if (relativePaths[index]) {
+      resolved.push(await readFile(safeGeneratedArticlePath(relativePaths[index]), "utf8"));
+    }
+  }
+
+  return resolved;
+}
+
+async function enrichContentsForUpload(contents = [], body = {}) {
+  if (!body.enrichImages) return contents;
+  const imageKeywords = Array.isArray(body.imageKeywords) ? body.imageKeywords : [];
+  const itemOverrides = Array.isArray(body.override?.items) ? body.override.items : [];
+  const warnings = [];
+  const enriched = [];
+
+  for (let index = 0; index < contents.length; index += 1) {
+    const content = contents[index];
+    try {
+      const result = await enrichMarkdownWithImages({
+        markdown: content,
+        keyword: imageKeywords[index] || itemOverrides[index]?.title || "",
+        provider: body.imageProvider || "auto",
+        maxImages: body.maxImagesPerArticle || 2,
+      });
+      enriched.push(result.markdown || content);
+      warnings.push(...(result.warnings || []).map((warning) => `#${index + 1}: ${warning}`));
+    } catch (error) {
+      enriched.push(content);
+      warnings.push(`#${index + 1}: ${error.message}`);
+    }
+  }
+
+  body.imageWarnings = warnings;
+  return enriched;
+}
+
+async function uploadArticles(site, contents = [], override = {}) {
+  const created = [];
+  const failed = [];
+  const items = contents.filter((content) => String(content || "").trim());
+  if (!items.length) throw new Error("没有可上传的 Markdown 文章。");
+
+  for (let index = 0; index < items.length; index += 1) {
+    const itemOverride = Array.isArray(override.items) ? override.items[index] || {} : {};
+    try {
+      const result = await uploadArticle(site, items[index], {
+        ...override,
+        ...itemOverride,
+      });
+      created.push({ index, ...result });
+    } catch (error) {
+      failed.push({
+        index,
+        title: itemOverride.title || "",
+        slug: itemOverride.slug || "",
+        error: error.message,
+      });
+    }
+  }
+
+  return {
+    ok: failed.length === 0,
+    requested: items.length,
+    created,
+    failed,
   };
 }
 
@@ -691,6 +792,14 @@ export async function handleWpSitesRoute(request, response, pathname) {
       slug: body.slug,
     });
     sendJson(response, 200, result);
+    return true;
+  }
+
+  if (pathname === "/api/wp-sites/batch-upload") {
+    const site = getWpSite(body.siteId, { includeSecrets: true });
+    const contents = await enrichContentsForUpload(await uploadContentsFromBody(body), body);
+    const result = await uploadArticles(site, contents, body.override || {});
+    sendJson(response, 200, { ...result, imageWarnings: body.imageWarnings || [] });
     return true;
   }
 

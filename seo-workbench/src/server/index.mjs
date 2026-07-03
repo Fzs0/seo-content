@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -6,7 +7,10 @@ import { handleAiStagesRoute } from "./routes/ai-stages.mjs";
 import { handleArticlesRoute } from "./routes/articles.mjs";
 import { handleBlogSitesRoute } from "./routes/blog-sites.mjs";
 import { handleGenerateRoute } from "./routes/generate.mjs";
+
 import { handleGoogleDataRoute } from "./routes/google-data.mjs";
+import { handleImagesRoute } from "./routes/images.mjs";
+
 import { handleMainSitesRoute } from "./routes/main-sites.mjs";
 import { handleSiteSnapshotRoute } from "./routes/site-snapshot.mjs";
 import { handleTodosRoute } from "./routes/todos.mjs";
@@ -25,6 +29,25 @@ const appRoutePaths = new Set([
   "/page-publishing",
   "/page-todos",
 ]);
+
+function loadLocalEnvFile(filename) {
+  try {
+    const content = readFileSync(join(projectRoot, filename), "utf8");
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const match = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/.exec(trimmed);
+      if (!match) continue;
+      const [, key, rawValue] = match;
+      if (process.env[key]) continue;
+      process.env[key] = rawValue.replace(/^['"]|['"]$/g, "").trim();
+    }
+  } catch {
+    // Optional local secrets file. Missing file is expected on fresh installs.
+  }
+}
+
+loadLocalEnvFile(".env.local");
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -119,8 +142,13 @@ export function createSeoWorkbenchServer() {
         return;
       }
 
-      if (url.pathname.startsWith("/api/google-data-sources")) {
+     if (url.pathname.startsWith("/api/google-data-sources")) {
         await handleGoogleDataRoute(request, response, url.pathname);
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/images")) {
+        await handleImagesRoute(request, response, url.pathname);
         return;
       }
 

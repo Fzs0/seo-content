@@ -3,6 +3,7 @@ import { join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deleteBlogSite, getBlogSite, normalizeBlogApiBaseUrl, readBlogSites, saveBlogSite } from "../blog-sites-store.mjs";
 import { methodNotAllowed, readJson, sendJson } from "../http.mjs";
+import { enrichMarkdownWithImages } from "./images.mjs";
 
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const generatedArticlesRoot = normalize(join(projectRoot, "generated-articles"));
@@ -271,6 +272,34 @@ async function uploadContentsFromBody(body = {}) {
   return resolved;
 }
 
+async function enrichContentsForUpload(contents = [], body = {}) {
+  if (!body.enrichImages) return contents;
+  const imageKeywords = Array.isArray(body.imageKeywords) ? body.imageKeywords : [];
+  const itemOverrides = Array.isArray(body.override?.items) ? body.override.items : [];
+  const warnings = [];
+  const enriched = [];
+
+  for (let index = 0; index < contents.length; index += 1) {
+    const content = contents[index];
+    try {
+      const result = await enrichMarkdownWithImages({
+        markdown: content,
+        keyword: imageKeywords[index] || itemOverrides[index]?.title || "",
+        provider: body.imageProvider || "auto",
+        maxImages: body.maxImagesPerArticle || 2,
+      });
+      enriched.push(result.markdown || content);
+      warnings.push(...(result.warnings || []).map((warning) => `#${index + 1}: ${warning}`));
+    } catch (error) {
+      enriched.push(content);
+      warnings.push(`#${index + 1}: ${error.message}`);
+    }
+  }
+
+  body.imageWarnings = warnings;
+  return enriched;
+}
+
 function siteForRequest(incoming = {}) {
   if (incoming.id && !incoming.openApiKey) {
     const existing = getBlogSite(incoming.id, { includeSecrets: true });
@@ -391,9 +420,9 @@ export async function handleBlogSitesRoute(request, response, pathname) {
 
   if (pathname === "/api/blog-sites/batch-upload") {
     const site = getBlogSite(body.siteId, { includeSecrets: true });
-    const contents = await uploadContentsFromBody(body);
+    const contents = await enrichContentsForUpload(await uploadContentsFromBody(body), body);
     const result = await uploadArticles(site, contents, body.override || {});
-    sendJson(response, 200, result);
+    sendJson(response, 200, { ...result, imageWarnings: body.imageWarnings || [] });
     return true;
   }
 

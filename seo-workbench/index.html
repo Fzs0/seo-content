@@ -439,7 +439,7 @@
             </div>
             <div class="button-row">
               <button class="soft-btn" id="loadContentSitePostsBtn">读取/刷新文章</button>
-              <button class="soft-btn" id="planContentOpportunitiesBtn">分析文章并规划关键词</button>
+              <button class="soft-btn" id="planContentOpportunitiesBtn">一键生成机会池</button>
               <button class="soft-btn" id="selectTopOpportunitiesBtn">按数量勾选优先词</button>
               <button class="ghost-btn" id="clearOpportunitySelectionBtn">清空勾选</button>
               <button class="primary-btn" id="batchGenerateSelectedBtn">批量生成勾选文章</button>
@@ -497,6 +497,25 @@
 
           <div class="diagnosis-view inventory-view" id="contentInventoryView"></div>
           <div class="diagnosis-view" id="contentOptimizationView"></div>
+
+          <div class="content-opportunity-toolbar">
+            <div>
+              <strong id="contentOpportunityInfo">0 个机会</strong>
+              <span>只展示当前页，避免机会池一次性铺满页面。</span>
+            </div>
+            <div class="pagination-controls">
+              <label>
+                每页
+                <select id="contentOpportunityPageSizeInput">
+                  <option value="10">10</option>
+                  <option value="25" selected>25</option>
+                  <option value="50">50</option>
+                </select>
+              </label>
+              <button class="soft-btn" id="prevOpportunityPageBtn">上一页</button>
+              <button class="soft-btn" id="nextOpportunityPageBtn">下一页</button>
+            </div>
+          </div>
 
           <div class="table-wrap content-opportunity-wrap">
             <table class="content-opportunity-table">
@@ -607,7 +626,6 @@
               <h3>内容生成控制台</h3>
             </div>
             <div class="button-row">
-              <button class="soft-btn" id="aiReviewKeywordsBtn">AI 复核关键词清单</button>
               <button class="soft-btn" id="buildPromptBtn">生成 Prompt</button>
               <button class="primary-btn" id="mockGenerateBtn">生成文章</button>
             </div>
