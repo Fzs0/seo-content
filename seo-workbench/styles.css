@@ -1225,6 +1225,37 @@ input[type="file"] {
   width: 110px;
 }
 
+.product-assets-view {
+  margin-top: 14px;
+}
+
+.product-asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.product-asset-card {
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.product-asset-card strong {
+  color: var(--ink);
+}
+
+.product-asset-card span,
+.product-asset-card code {
+  color: var(--muted);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
 .opportunity-score {
   display: grid;
   width: 92px;
@@ -1472,7 +1503,8 @@ input[type="file"] {
 
 .wp-publisher-card,
 .blog-publisher-card,
-.main-publisher-card {
+.main-publisher-card,
+.image-publisher-card {
   margin-top: 14px;
   padding: 16px;
   border: 1px solid rgba(39, 60, 49, 0.14);
@@ -1483,10 +1515,26 @@ input[type="file"] {
 .wp-form-grid,
 .blog-form-grid,
 .main-form-grid,
+.image-provider-grid,
 .review-data-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 12px;
+}
+
+.image-publisher-card {
+  background:
+    linear-gradient(135deg, rgba(255, 251, 241, 0.78), rgba(236, 225, 199, 0.52)),
+    radial-gradient(circle at top right, rgba(180, 111, 66, 0.13), transparent 18rem);
+}
+
+.image-provider-grid .checkbox-field {
+  align-self: end;
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid rgba(39, 60, 49, 0.12);
+  border-radius: var(--radius-md);
+  background: rgba(245, 239, 226, 0.48);
 }
 
 .review-hero {

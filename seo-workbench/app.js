@@ -15,6 +15,16 @@ const AI_STAGE_DEFS = {
     endpoint: "/api/generate",
     temperature: 0.2,
   },
+  productExtraction: {
+    label: "产品资产提取",
+    hint: "用于从产品 API 返回的大量原始数据中提取标准产品卡片、商业承接页和可用于文章内链的锚文本提示。提取结果会缓存，不需要每次重复消耗 AI。",
+    provider: "deepseek",
+    apiFormat: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+    model: "deepseek-v4-flash",
+    endpoint: "/api/generate",
+    temperature: 0.1,
+  },
   briefGeneration: {
     label: "AI 增强 Brief",
     hint: "先用本地 SEO 标准生成基准 Brief，再让外部模型补强搜索意图、结构、证据缺口和内链计划。",
@@ -108,6 +118,9 @@ const state = {
   googleDataSources: [],
   selectedGoogleDataSourceId: "",
   googleReviewData: null,
+  googleReviewCache: {},
+  imageConfig: null,
+  productAssets: null,
   activePage: "setup",
   contentHub: {
     source: "blog",
@@ -221,6 +234,207 @@ async function api(path, payload = null) {
   const data = text ? JSON.parse(text) : {};
   if (!response.ok) throw new Error(data.error || `${path} returned ${response.status}`);
   return data;
+}
+
+function imageKeywordForCurrentArticle() {
+  const markdown = String(state.article || "");
+  return (
+    /^##\s+Primary Keyword\s*:\s*(.+)$/im.exec(markdown)?.[1]?.trim() ||
+    extractH2Value(markdown, "Primary Keyword") ||
+    selectedItem()?.keyword ||
+    state.articleParts?.title ||
+    ""
+  );
+}
+
+function imageUploadOptions() {
+  const enrichImages = $("imageEnrichOnUploadInput")?.value !== "0";
+  const provider = $("imageProviderInput")?.value || "auto";
+  const maxImagesPerArticle = Number($("imageMaxImagesInput")?.value || 2);
+  return {
+    enrichImages,
+    imageProvider: provider,
+    maxImagesPerArticle,
+    imageKeyword: imageKeywordForCurrentArticle(),
+  };
+}
+
+function renderImageConfig() {
+  const config = state.imageConfig || {};
+  if ($("imageProviderInput") && config.defaultProvider && $("imageProviderInput").value === "auto") {
+    $("imageProviderInput").value = config.defaultProvider || "auto";
+  }
+
+  const providers = config.providers || {};
+  const lines = ["图片源状态："]
+    .concat(
+      ["pexels", "unsplash", "pixabay"].map((provider) => {
+        const item = providers[provider] || {};
+        return `- ${provider}: ${item.enabled ? `已配置 ${item.source || ""} ${item.keyPreview || ""}`.trim() : "未配置"}`;
+      }),
+    );
+  $("imageConfigStatus").textContent = config.providers
+    ? lines.join("  ")
+    : "图片 API 尚未读取。Pexels Key 可保存到服务端本地配置。";
+}
+
+async function loadImageConfig() {
+  state.imageConfig = await api("/api/images/config");
+  renderImageConfig();
+}
+
+function renderProductAssets() {
+  const view = $("productAssetsView");
+  if (!view) return;
+  const assets = state.productAssets || {};
+  const products = Array.isArray(assets.products) ? assets.products : [];
+  const endpointInput = $("productApiEndpointInput");
+  const savedEndpoint = assets.api?.endpoint || "";
+  if (endpointInput && savedEndpoint && !endpointInput.value.trim()) endpointInput.value = savedEndpoint;
+  if ($("productApiHeadersInput")) {
+    $("productApiHeadersInput").placeholder = assets.api?.headersSet
+      ? `已保存请求头：${assets.api.headersPreview || "已隐藏"}，留空则继续使用`
+      : 'Authorization: Bearer xxx\n也支持 {"Authorization":"Bearer xxx"}';
+  }
+
+  if (!products.length) {
+    view.innerHTML = `<article class="diagnosis-card"><h4>产品资产库为空</h4><p>可以手动填写商业页面，也可以保存产品 API 后点击“AI 提取产品资产”。提取结果会缓存到本机服务端。</p></article>`;
+    return;
+  }
+
+  view.innerHTML = `
+    <article class="diagnosis-card diagnosis-card-wide">
+      <h4>已缓存 ${products.length} 个产品资产</h4>
+      <p>最近提取：${escapeHtml(assets.extractedAt || assets.updatedAt || "未记录")}。这些产品可作为主站商业承接页、文章内链和 Brief 里的产品证据候选。</p>
+      <div class="product-asset-grid">
+        ${products.slice(0, 12).map((product) => `
+          <div class="product-asset-card">
+            <strong>${escapeHtml(product.title || product.name || "Untitled product")}</strong>
+            <span>${escapeHtml(product.category || product.handle || "")}</span>
+            <code>${escapeHtml(product.url || product.commercialPageHint || product.handle || "")}</code>
+          </div>
+        `).join("")}
+      </div>
+    </article>
+  `;
+}
+
+async function loadProductAssets() {
+  state.productAssets = await api("/api/products");
+  renderProductAssets();
+  const count = state.productAssets?.products?.length || 0;
+  if ($("productAssetsStatus")) {
+    $("productAssetsStatus").textContent = count
+      ? `已读取缓存产品资产 ${count} 个。`
+      : "还没有缓存产品资产；可以保存产品 API 后提取一次。";
+  }
+}
+
+function readProductApiForm() {
+  return {
+    endpoint: $("productApiEndpointInput")?.value.trim() || "",
+    method: "GET",
+    headersText: $("productApiHeadersInput")?.value.trim() || "",
+  };
+}
+
+async function saveProductApiConfig() {
+  $("productAssetsStatus").textContent = "正在保存产品 API 配置...";
+  state.productAssets = await api("/api/products/config", { api: readProductApiForm() });
+  if ($("productApiHeadersInput")) $("productApiHeadersInput").value = "";
+  renderProductAssets();
+  $("productAssetsStatus").textContent = "已保存产品 API 配置到服务端本地缓存。";
+}
+
+async function extractProductAssets() {
+  $("productAssetsStatus").textContent = "正在拉取产品 API，并调用 AI 提取产品资产...";
+  const stage = state.aiStages.productExtraction || state.aiStages.keywordAnalysis || {};
+  const data = await api("/api/products/extract", {
+    project: readProject(),
+    api: readProductApiForm(),
+    stageConfig: stageConfigForRequest(stage),
+    useAi: true,
+  });
+  state.productAssets = data;
+  renderProductAssets();
+  $("productAssetsStatus").textContent = data.ai?.configured
+    ? `已从 ${data.fetched || 0} 条原始数据中提取 ${data.extracted || 0} 个产品资产，并已缓存。`
+    : `已用本地规则从 ${data.fetched || 0} 条原始数据中提取 ${data.extracted || 0} 个产品资产；如需 AI 精提，请配置“产品资产提取”阶段。`;
+}
+
+function productAssetLines(products = state.productAssets?.products || []) {
+  return products
+    .map((product) => product.commercialPageHint || product.url || product.handle || "")
+    .filter(Boolean)
+    .map((url) => String(url).trim())
+    .filter(Boolean);
+}
+
+function syncProductsToMainPages() {
+  const lines = productAssetLines();
+  if (!lines.length) {
+    $("productAssetsStatus").textContent = "还没有可回填的产品 URL。请先提取产品资产。";
+    return;
+  }
+  const current = $("mainPagesInput").value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const next = Array.from(new Set([...current, ...lines]));
+  $("mainPagesInput").value = next.join("\n");
+  state.project = readProject();
+  $("productAssetsStatus").textContent = `已回填 ${next.length - current.length} 个新的商业页面到“主站商业页面”。`;
+  saveWorkspaceDraft("产品资产已回填到主站商业页面。");
+}
+
+async function saveImageConfig() {
+  const provider = $("imageProviderInput").value === "auto" ? "pexels" : $("imageProviderInput").value;
+  const apiKey = $("imageApiKeyInput").value.trim();
+  const data = await api("/api/images/config", {
+    defaultProvider: $("imageProviderInput").value || "auto",
+    provider,
+    apiKey,
+    clearApiKey: $("clearImageApiKeyInput").checked,
+  });
+  state.imageConfig = data.config;
+  $("imageApiKeyInput").value = "";
+  $("clearImageApiKeyInput").checked = false;
+  renderImageConfig();
+  $("imageConfigStatus").textContent = `图片配置已保存。${provider}：${state.imageConfig.providers?.[provider]?.enabled ? "已配置" : "未配置"}`;
+}
+
+async function testImageSearch() {
+  const query = $("imageTestQueryInput").value.trim() || imageKeywordForCurrentArticle();
+  if (!query) {
+    $("imageTestQueryInput").focus();
+    $("imageConfigStatus").textContent = "请先填写测试关键词，或先生成一篇文章。";
+    return;
+  }
+
+  $("imageConfigStatus").textContent = `正在搜索图片：${query}`;
+  const data = await api("/api/images/search", {
+    query,
+    provider: $("imageProviderInput").value || "auto",
+    perPage: 4,
+  });
+  $("imageSearchOutput").textContent = JSON.stringify(
+    {
+      provider: data.provider,
+      query: data.query,
+      images: (data.images || []).map((image) => ({
+        alt: image.alt,
+        url: image.url,
+        sourceUrl: image.sourceUrl,
+        photographer: image.photographer,
+      })),
+      errors: data.errors || [],
+    },
+    null,
+    2,
+  );
+  $("imageConfigStatus").textContent = data.images?.length
+    ? `搜图成功：${data.provider} 返回 ${data.images.length} 张。上传时会自动选第一张匹配图。`
+    : `没有搜到图片：${(data.errors || []).join("；") || "无结果"}`;
 }
 
 function requestId(prefix = "req") {
@@ -481,6 +695,14 @@ function serializableContentHubDraft() {
   };
 }
 
+function serializableGoogleReviewCache() {
+  return Object.fromEntries(
+    Object.entries(state.googleReviewCache || {})
+      .filter(([, entry]) => entry?.data)
+      .slice(-8),
+  );
+}
+
 function saveWorkspaceDraft(message = "") {
   try {
     const draft = {
@@ -499,6 +721,9 @@ function saveWorkspaceDraft(message = "") {
       articleSave: state.articleSave,
       activePage: state.activePage,
       contentHub: serializableContentHubDraft(),
+      selectedGoogleDataSourceId: state.selectedGoogleDataSourceId,
+      googleReviewData: state.googleReviewData,
+      googleReviewCache: serializableGoogleReviewCache(),
     };
     localStorage.setItem(WORKSPACE_DRAFT_KEY, JSON.stringify(draft));
     if ($("projectSaveStatus")) {
@@ -538,6 +763,9 @@ function restoreWorkspaceDraft() {
     state.articleParts = splitArticleForWp(state.article);
     state.articleSave = draft.articleSave || null;
     state.activePage = draft.activePage || state.activePage;
+    state.selectedGoogleDataSourceId = draft.selectedGoogleDataSourceId || "";
+    state.googleReviewCache = draft.googleReviewCache && typeof draft.googleReviewCache === "object" ? draft.googleReviewCache : {};
+    state.googleReviewData = draft.googleReviewData || state.googleReviewCache[state.selectedGoogleDataSourceId]?.data || null;
     if (draft.contentHub && typeof draft.contentHub === "object") {
       state.contentHub = {
         ...state.contentHub,
@@ -737,6 +965,7 @@ async function uploadCurrentArticleToWp() {
     status: $("wpDefaultStatusInput").value || "draft",
     categoryId: $("wpDefaultCategoryInput").value.trim(),
     slug: state.articleParts?.slug || "",
+    ...imageUploadOptions(),
   });
 
   const formatNote = data.contentFormat === "wordpress_blocks" ? "正文已按 Gutenberg 区块上传" : "正文已上传";
@@ -745,10 +974,16 @@ async function uploadCurrentArticleToWp() {
     : data.rankMathMetaError
       ? `Rank Math TDK 未写入：${data.rankMathMetaError}`
       : "Rank Math TDK 没有可写入字段";
+  const imageNote = Array.isArray(data.imageWarnings) && data.imageWarnings.length
+    ? `图片提示：${data.imageWarnings.join("；")}`
+    : imageUploadOptions().enrichImages
+      ? "图片占位已在上传前尝试补齐"
+      : "未启用自动补图";
   $("wpPublishStatus").innerHTML = [
     `上传成功：${escapeHtml(data.title)}（${escapeHtml(data.status)}）。`,
     escapeHtml(formatNote),
     escapeHtml(seoNote),
+    escapeHtml(imageNote),
     `<a href="${escapeHtml(data.editLink)}" target="_blank" rel="noreferrer">打开 WP 编辑页</a>`,
   ].join("<br>");
 }
@@ -1485,6 +1720,7 @@ function planContentOpportunities() {
   };
   renderContentHub();
   saveWorkspaceDraft(`已为 ${site.name} 规划 ${opportunities.length} 个内容机会。`);
+  return opportunities;
 }
 
 function contentHubPostsLoadedFor(site = selectedContentSite()) {
@@ -1496,7 +1732,141 @@ function contentHubPostsLoadedFor(site = selectedContentSite()) {
   );
 }
 
-async function ensureContentOpportunities() {
+function parseJsonFromAiText(text = "") {
+  const clean = String(text || "")
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```$/i, "")
+    .trim();
+  try {
+    return JSON.parse(clean);
+  } catch {
+    const match = clean.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+    if (!match) throw new Error("AI 没有返回可解析的 JSON。");
+    return JSON.parse(match[0]);
+  }
+}
+
+function opportunityReviewPrompt(opportunities = [], site = selectedContentSite()) {
+  const project = readProject();
+  const sample = opportunities.slice(0, 80).map((item) => {
+    const keyword = state.keywords.find((candidate) => candidate.id === item.keywordId) || {};
+    return {
+      opportunityId: item.id,
+      keywordId: item.keywordId,
+      keyword: item.keyword,
+      topicCluster: item.topicCluster,
+      volume: keyword.volume || 0,
+      kd: keyword.kd || 0,
+      intent: keyword.intent || "",
+      serpFeatures: keyword.serpFeatures || "",
+      localAssignedSite: item.originalAssignedSite || keyword.assignedSite || "",
+      localPageType: item.originalPageType || keyword.pageType || "",
+      targetSite: item.siteName,
+      targetSiteRole: item.siteRole,
+      targetMarket: item.siteMarket,
+      targetLanguage: item.siteLanguage,
+      coverage: item.coverage,
+      matchedPosts: item.matchedPosts || [],
+      localAction: item.action,
+      localPriority: item.priority,
+      localScore: item.score,
+      localReason: item.reason,
+    };
+  });
+
+  return [
+    "你是 Google SEO 关键词机会池审核人。请基于本地规则结果、Semrush 字段和站点已有文章，审核哪些关键词值得写新文章。",
+    "必须返回严格 JSON，不要 Markdown，不要解释性前后缀。",
+    "",
+    "输出格式：",
+    '{"items":[{"opportunityId":"","decision":"keep|drop|revise","priority":"P0|P1|P2|P3|Hold","score":0,"pageType":"","action":"","contentAngle":"","serpFeatureNotes":"","reason":""}]}',
+    "",
+    "审核规则：",
+    "- 本地规则是 baseline，不要无理由推翻。",
+    "- SERP Features 要影响判断：Shopping/Ads/Local Pack 更偏商业或本地，不适合普通博客；People Also Ask/Featured Snippet/Video/Image 可作为文章结构信号。",
+    "- 如果目标站点语言或市场不匹配，decision=drop 或 priority=Hold。",
+    "- 如果已有文章已精确覆盖，优先 action=更新旧文，而不是新写。",
+    "- 非主站文章默认只做本站内链，不要建议给主站/产品页外链。",
+    "- 不要声称检查了 Google 前 10；这里只能基于 Semrush 字段和已给数据审核。",
+    "",
+    "项目定位：",
+    JSON.stringify(project, null, 2),
+    "",
+    "当前站点：",
+    JSON.stringify(site ? inferSiteProfile(site) : {}, null, 2),
+    "",
+    "标准摘要：",
+    JSON.stringify({ scoring: state.standard?.scoring, signals: state.standard?.signals, localePolicy: state.standard?.localePolicy }, null, 2),
+    "",
+    "待审核机会：",
+    JSON.stringify(sample, null, 2),
+  ].join("\n");
+}
+
+async function aiReviewContentOpportunities() {
+  const opportunities = state.contentHub.opportunities || [];
+  if (!opportunities.length) return;
+  const stage = state.aiStages.keywordAnalysis || {};
+  if (stage.provider === "local" || stage.apiFormat === "local") {
+    $("contentHubStatus").textContent = "已生成本地机会池；关键词分析阶段当前是 Local，所以未调用 AI 复核。";
+    return;
+  }
+
+  $("contentHubStatus").textContent = `本地机会池已生成，正在让 ${stage.provider || "AI"} 复核前 ${Math.min(80, opportunities.length)} 个机会...`;
+  const response = await fetch(stage.endpoint || "/api/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      stage: "keywordAnalysis",
+      stageConfig: stageConfigForRequest(stage),
+      provider: stage.provider,
+      model: stage.model,
+      prompt: opportunityReviewPrompt(opportunities),
+      project: readProject(),
+    }),
+  });
+  const data = await response.json();
+  if (!data.configured || data.status) {
+    $("contentHubStatus").textContent = "本地机会池已生成；AI 复核未成功，请检查关键词分析阶段 API 配置。";
+    return;
+  }
+
+  const parsed = parseJsonFromAiText(data.content || "");
+  const reviews = Array.isArray(parsed) ? parsed : parsed.items || [];
+  const reviewMap = new Map(reviews.map((item) => [String(item.opportunityId || ""), item]));
+  state.contentHub.opportunities = opportunities
+    .map((item) => {
+      const review = reviewMap.get(String(item.id));
+      if (!review) return item;
+      const score = Number(review.score);
+      return {
+        ...item,
+        aiReviewed: true,
+        aiDecision: review.decision || "keep",
+        priority: review.priority || item.priority,
+        score: Number.isFinite(score) ? Math.max(0, Math.min(100, Math.round(score))) : item.score,
+        pageType: review.pageType || item.pageType,
+        action: review.action || item.action,
+        contentAngle: review.contentAngle || "",
+        serpFeatureNotes: review.serpFeatureNotes || "",
+        aiReason: review.reason || "",
+      };
+    })
+    .filter((item) => item.aiDecision !== "drop")
+    .sort((a, b) => b.score - a.score);
+
+  state.contentHub.opportunityPage = 1;
+  state.contentHub.selectedIds = state.contentHub.selectedIds.filter((id) =>
+    state.contentHub.opportunities.some((item) => item.id === id),
+  );
+  renderContentHub();
+  $("contentHubStatus").textContent = `AI 已复核 ${reviews.length} 个机会，当前保留 ${state.contentHub.opportunities.length} 个可写/可优化机会。`;
+  saveWorkspaceDraft("AI 已复核内容机会池。");
+}
+
+async function ensureContentOpportunities({ aiReview = false } = {}) {
   const site = selectedContentSite();
   if (!site) {
     $("contentHubStatus").textContent = "请先选择一个具体站点。";
@@ -1510,10 +1880,12 @@ async function ensureContentOpportunities() {
   if (!contentHubPostsLoadedFor(site)) {
     $("contentHubStatus").textContent = `正在先读取 ${site.name} 的文章，然后生成机会池...`;
     await loadContentHubSitePosts({ autoPlan: true, force: false });
+    if (aiReview) await aiReviewContentOpportunities();
     return;
   }
 
   planContentOpportunities();
+  if (aiReview) await aiReviewContentOpportunities();
 }
 
 function opportunityScoreBand(score = 0) {
@@ -1625,11 +1997,14 @@ function renderContentHub() {
       const matched = item.matchedPosts?.length
         ? item.matchedPosts.map((post) => post.title).join(" / ")
         : "";
+      const sourceKeyword = state.keywords.find((keyword) => keyword.id === item.keywordId) || {};
+      const serpNote = item.serpFeatureNotes || sourceKeyword.serpFeatures || "";
+      const aiNote = item.aiReason || item.contentAngle || "";
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td><input type="checkbox" data-opportunity-check="${escapeHtml(item.id)}" ${selectedSet.has(item.id) ? "checked" : ""} /></td>
-        <td><strong>${escapeHtml(item.keyword)}</strong><span class="asset-path">${escapeHtml(item.topicCluster)}</span></td>
-        <td>${escapeHtml(item.coverage)}${matched ? `<span class="asset-path">${escapeHtml(matched)}</span>` : ""}</td>
+        <td><strong>${escapeHtml(item.keyword)}</strong><span class="asset-path">${escapeHtml(item.topicCluster)}</span>${serpNote ? `<span class="asset-path">SERP: ${escapeHtml(serpNote)}</span>` : ""}</td>
+        <td>${escapeHtml(item.coverage)}${matched ? `<span class="asset-path">${escapeHtml(matched)}</span>` : ""}${aiNote ? `<span class="asset-path">AI: ${escapeHtml(aiNote)}</span>` : ""}</td>
         <td>${escapeHtml(item.assignedSite)}</td>
         <td>${escapeHtml(item.pageType)}</td>
         <td>${escapeHtml(item.action)}</td>
@@ -1744,6 +2119,7 @@ function compactKeywordsForDiagnosis(limit = 180) {
     volume: item.volume || 0,
     kd: item.kd || 0,
     intent: item.intent || "",
+    serpFeatures: item.serpFeatures || "",
     assignedSite: item.assignedSite || "",
     pageType: item.pageType || "",
     pageRole: item.pageRole || "",
@@ -2148,6 +2524,7 @@ async function uploadCurrentArticleToBlog() {
     categoryId: $("blogDefaultCategoryInput").value.trim(),
     coverUrl: $("blogDefaultCoverInput").value.trim(),
     slug: state.articleParts?.slug || "",
+    ...imageUploadOptions(),
   });
 
   const failedCount = Array.isArray(data.failed) ? data.failed.length : 0;
@@ -2155,7 +2532,7 @@ async function uploadCurrentArticleToBlog() {
   $("blogPostsOutput").textContent = JSON.stringify(data.raw || data, null, 2);
   $("blogPublishStatus").textContent = failedCount
     ? `已提交 ${data.requested} 篇，成功 ${createdCount} 篇，失败 ${failedCount} 篇。请查看下方 failed 明细。`
-    : `上传成功：已通过批量接口提交 ${data.requested} 篇 Markdown 文章。`;
+    : `上传成功：已通过批量接口提交 ${data.requested} 篇 Markdown 文章。${data.imageWarnings?.length ? `图片提示：${data.imageWarnings.join("；")}` : ""}`;
 }
 
 async function uploadMarkdownFilesToBlog() {
@@ -2176,6 +2553,7 @@ async function uploadMarkdownFilesToBlog() {
   const data = await api("/api/blog-sites/batch-upload", {
     siteId: state.selectedBlogSiteId,
     contents,
+    ...imageUploadOptions(),
     override: {
       status: $("blogDefaultStatusInput").value || "draft",
       author: $("blogDefaultAuthorInput").value.trim() || "Admin",
@@ -2189,7 +2567,7 @@ async function uploadMarkdownFilesToBlog() {
   $("blogPostsOutput").textContent = JSON.stringify(data.raw || data, null, 2);
   $("blogPublishStatus").textContent = failedCount
     ? `批量上传完成：提交 ${data.requested} 篇，成功 ${createdCount} 篇，失败 ${failedCount} 篇。请查看下方 failed 明细。`
-    : `批量上传成功：已提交 ${data.requested} 篇 Markdown 文章。`;
+    : `批量上传成功：已提交 ${data.requested} 篇 Markdown 文章。${data.imageWarnings?.length ? `图片提示：${data.imageWarnings.join("；")}` : ""}`;
 }
 
 function readMainSiteForm() {
@@ -2370,6 +2748,7 @@ async function uploadCurrentArticleToMain() {
   const data = await api("/api/main-sites/upload", {
     siteId: state.selectedMainSiteId,
     content: state.article,
+    ...imageUploadOptions(),
     override: {
       status: Number($("mainDefaultStatusInput").value || 0),
       authorName: $("mainDefaultAuthorInput").value.trim() || "Admin",
@@ -2380,7 +2759,7 @@ async function uploadCurrentArticleToMain() {
     },
   });
   $("mainPostsOutput").textContent = JSON.stringify(data, null, 2);
-  $("mainPublishStatus").textContent = `主站文章上传成功：${data.payloadPreview?.title || "Untitled"}。`;
+  $("mainPublishStatus").textContent = `主站文章上传成功：${data.payloadPreview?.title || "Untitled"}。${data.imageWarnings?.length ? `图片提示：${data.imageWarnings.join("；")}` : ""}`;
 }
 
 function stageConfigForRequest(stage) {
@@ -2726,6 +3105,7 @@ async function previewSiteApis() {
   $("siteApiPreview").textContent = "正在测试站点 API 数据源...";
   const data = await api("/api/site-snapshot", {
     project: readProject(),
+    productApi: readProductApiForm(),
   });
   $("siteApiPreview").textContent = JSON.stringify(data, null, 2);
 }
@@ -2953,7 +3333,13 @@ function renderGeneration() {
 
 function hasConfiguredSiteApi() {
   const siteApis = readProject().siteApis || {};
-  return Boolean(siteApis.mainPagesApi || siteApis.mainBlogApi || siteApis.blogApis?.length);
+  return Boolean(
+    siteApis.mainPagesApi ||
+      siteApis.mainBlogApi ||
+      siteApis.blogApis?.length ||
+      $("productApiEndpointInput")?.value.trim() ||
+      state.productAssets?.api?.endpoint,
+  );
 }
 
 function generatedArticlesForSelectedContentSite() {
@@ -3000,6 +3386,8 @@ function updateActionStates() {
   const opportunities = state.contentHub.opportunities || [];
   const selectedOpportunityCount = (state.contentHub.selectedIds || []).length;
   const generatedForSite = uploadableArticlesForLatestBatch();
+  const hasProductEndpoint = Boolean($("productApiEndpointInput")?.value.trim() || state.productAssets?.api?.endpoint);
+  const hasProductAssets = Boolean(state.productAssets?.products?.length);
 
   setActionEnabled("previewSiteApisBtn", hasConfiguredSiteApi(), "先在上方填写至少一个站点 API 地址。");
   setActionEnabled("reanalyzeKeywordsBtn", hasKeywords, "先导入或粘贴关键词。");
@@ -3093,6 +3481,30 @@ function selectedGoogleDataSource() {
   return state.googleDataSources.find((source) => source.id === state.selectedGoogleDataSourceId) || null;
 }
 
+function rememberGoogleReviewData(data, sourceId = state.selectedGoogleDataSourceId) {
+  if (!sourceId || !data) return;
+  const cachedAt = new Date().toISOString();
+  state.googleReviewData = {
+    ...data,
+    cachedAt,
+  };
+  state.googleReviewCache = {
+    ...(state.googleReviewCache || {}),
+    [sourceId]: {
+      cachedAt,
+      sourceId,
+      dateRange: data.dateRange || null,
+      data: state.googleReviewData,
+    },
+  };
+}
+
+function restoreCachedGoogleReviewData(sourceId = state.selectedGoogleDataSourceId) {
+  const cached = state.googleReviewCache?.[sourceId];
+  state.googleReviewData = cached?.data || null;
+  return cached || null;
+}
+
 function renderGoogleDataSources() {
   const select = $("googleDataSourceSelect");
   if (!select) return;
@@ -3118,7 +3530,9 @@ function renderGoogleDataSources() {
     : '{"type":"service_account","client_email":"...","private_key":"..."}';
 
   if (current?.serviceAccountSet) {
-    $("googleDataStatus").textContent = `已选择数据源：${current.name}。服务账号：${current.serviceAccountEmail || "已保存"}。`;
+    const cached = state.googleReviewCache?.[current.id];
+    const cacheText = cached?.cachedAt ? ` 已恢复缓存：${new Date(cached.cachedAt).toLocaleString()}。` : "";
+    $("googleDataStatus").textContent = `已选择数据源：${current.name}。服务账号：${current.serviceAccountEmail || "已保存"}。${cacheText}`;
   } else if (state.googleDataSources.length) {
     $("googleDataStatus").textContent = "请选择一个已保存数据源，或新建一个 Google 数据源。";
   }
@@ -3462,9 +3876,11 @@ async function readGoogleDataSourceForm() {
 async function loadGoogleDataSources() {
   const data = await api("/api/google-data-sources");
   state.googleDataSources = data.sources || [];
-  if (!state.selectedGoogleDataSourceId && state.googleDataSources[0]) {
+  const selectedStillExists = state.googleDataSources.some((source) => source.id === state.selectedGoogleDataSourceId);
+  if ((!state.selectedGoogleDataSourceId || !selectedStillExists) && state.googleDataSources[0]) {
     state.selectedGoogleDataSourceId = state.googleDataSources[0].id;
   }
+  if (!state.googleReviewData) restoreCachedGoogleReviewData(state.selectedGoogleDataSourceId);
   renderGoogleDataSources();
 }
 
@@ -3496,9 +3912,10 @@ async function loadGoogleReviewData() {
     endDate: $("googleDataEndInput").value,
     rowLimit: 100,
   });
-  state.googleReviewData = data;
-  $("googleDataStatus").textContent = `已拉取复盘数据：${data.dateRange?.startDate || ""} 至 ${data.dateRange?.endDate || ""}。`;
+  rememberGoogleReviewData(data, sourceId);
+  $("googleDataStatus").textContent = `已拉取并缓存复盘数据：${data.dateRange?.startDate || ""} 至 ${data.dateRange?.endDate || ""}。刷新页面后会自动恢复。`;
   renderGoogleReviewData();
+  saveWorkspaceDraft("Google 复盘数据已缓存到本机浏览器。");
 }
 
 function renderAll() {
@@ -3513,6 +3930,8 @@ function renderAll() {
   renderAiStages();
   renderGeneration();
   renderWpSites();
+  renderImageConfig();
+  renderProductAssets();
   renderGoogleDataSources();
   renderTodos();
   applyActivePage(state.activePage);
@@ -3717,6 +4136,7 @@ function keywordReviewPrompt() {
     volume: item.volume,
     kd: item.kd,
     intent: item.intent,
+    serpFeatures: item.serpFeatures || "",
     assignedSite: item.assignedSite,
     pageType: item.pageType,
     priority: item.priority,
@@ -3929,6 +4349,9 @@ function opportunityPromptContext(item = selectedItem()) {
     `Coverage status: ${opportunity.coverage}`,
     `Recommended action: ${opportunity.action}`,
     `Outbound rule: ${opportunity.nonMainRule}`,
+    opportunity.serpFeatureNotes ? `SERP feature notes: ${opportunity.serpFeatureNotes}` : "",
+    opportunity.contentAngle ? `AI-reviewed content angle: ${opportunity.contentAngle}` : "",
+    opportunity.aiReason ? `AI review reason: ${opportunity.aiReason}` : "",
     "",
     "Existing same-site coverage found:",
     matched,
@@ -4170,13 +4593,14 @@ async function uploadGeneratedArticlesToContentSite() {
   ].filter(Boolean).join("\n");
 
   const uploadEndpoint = site.type === "wp" ? "/api/wp-sites/batch-upload" : "/api/blog-sites/batch-upload";
+  const imageOptions = imageUploadOptions();
   const data = await api(uploadEndpoint, {
     siteId: site.id,
     contents: generated.map((article) => article.content),
     relativePaths: generated.map((article) => article.savedPath || ""),
-    enrichImages: true,
-    imageProvider: "auto",
-    maxImagesPerArticle: 2,
+    enrichImages: imageOptions.enrichImages,
+    imageProvider: imageOptions.imageProvider,
+    maxImagesPerArticle: imageOptions.maxImagesPerArticle,
     imageKeywords: generated.map((article) => article.keyword || article.title || ""),
     override: {
       status: site.defaultStatus || "draft",
@@ -4428,6 +4852,20 @@ function bindEvents() {
       previewSiteApis().catch((error) => ($("siteApiPreview").textContent = `抓取失败：${error.message}`)),
     ),
   );
+  $("saveProductApiBtn").addEventListener("click", () =>
+    withButtonBusy("saveProductApiBtn", () =>
+      saveProductApiConfig().catch((error) => ($("productAssetsStatus").textContent = `保存产品 API 失败：${error.message}`)),
+    ),
+  );
+  $("extractProductsBtn").addEventListener("click", () =>
+    withButtonBusy("extractProductsBtn", () =>
+      extractProductAssets().catch((error) => ($("productAssetsStatus").textContent = `提取产品资产失败：${error.message}`)),
+    ),
+  );
+  $("syncProductsToMainPagesBtn").addEventListener("click", syncProductsToMainPages);
+  ["productApiEndpointInput", "productApiHeadersInput"].forEach((id) => {
+    $(id)?.addEventListener("input", updateActionStates);
+  });
 
   $("standardEditor").addEventListener("input", () => {
     state.standardDirty = true;
@@ -4693,7 +5131,7 @@ function bindEvents() {
   );
   $("planContentOpportunitiesBtn").addEventListener("click", () =>
     withButtonBusy("planContentOpportunitiesBtn", () =>
-      ensureContentOpportunities().catch((error) => ($("contentHubStatus").textContent = `生成机会池失败：${error.message}`)),
+      ensureContentOpportunities({ aiReview: true }).catch((error) => ($("contentHubStatus").textContent = `生成机会池失败：${error.message}`)),
     ),
   );
   $("contentOpportunityPageSizeInput").addEventListener("change", () => {
@@ -4726,8 +5164,9 @@ function bindEvents() {
   );
   $("googleDataSourceSelect").addEventListener("change", () => {
     state.selectedGoogleDataSourceId = $("googleDataSourceSelect").value;
-    state.googleReviewData = null;
+    restoreCachedGoogleReviewData(state.selectedGoogleDataSourceId);
     renderGoogleDataSources();
+    saveWorkspaceDraft();
   });
   $("reloadGoogleDataSourcesBtn").addEventListener("click", () =>
     loadGoogleDataSources().catch((error) => ($("googleDataStatus").textContent = `读取失败：${error.message}`)),
@@ -4765,6 +5204,17 @@ function bindEvents() {
   $("exportTodosBtn").addEventListener("click", () => {
     downloadFile("seo-workbench-todos.json", JSON.stringify({ todos: state.todos }, null, 2), "application/json;charset=utf-8");
   });
+  $("saveImageConfigBtn").addEventListener("click", () =>
+    withButtonBusy("saveImageConfigBtn", () => saveImageConfig().catch((error) => ($("imageConfigStatus").textContent = `保存失败：${error.message}`))),
+  );
+  $("testImageSearchBtn").addEventListener("click", () =>
+    withButtonBusy("testImageSearchBtn", () => testImageSearch().catch((error) => ($("imageConfigStatus").textContent = `搜图失败：${error.message}`))),
+  );
+  $("imageProviderInput").addEventListener("change", () => {
+    $("imageApiKeyInput").value = "";
+    $("clearImageApiKeyInput").checked = false;
+    renderImageConfig();
+  });
 }
 
 async function init() {
@@ -4788,6 +5238,12 @@ async function init() {
     });
     await loadGoogleDataSources().catch((error) => {
       $("googleDataStatus").textContent = `Google 复盘数据源读取失败：${error.message}`;
+    });
+    await loadImageConfig().catch((error) => {
+      $("imageConfigStatus").textContent = `图片 API 配置读取失败：${error.message}`;
+    });
+    await loadProductAssets().catch((error) => {
+      $("productAssetsStatus").textContent = `产品资产读取失败：${error.message}`;
     });
     await loadTodos();
     renderAll();

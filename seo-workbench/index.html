@@ -186,11 +186,24 @@
                 博客站 API 列表
                 <textarea id="blogApisInput" rows="4" placeholder="一行一个 API，例如：&#10;https://blog-a.com/api/posts&#10;https://blog-b.com/api/posts"></textarea>
               </label>
+              <label class="wide-field">
+                产品 API 地址
+                <input id="productApiEndpointInput" type="text" placeholder="例如：https://your-store.com/api/products" />
+              </label>
+              <label class="wide-field">
+                产品 API 请求头
+                <textarea id="productApiHeadersInput" rows="4" placeholder='Authorization: Bearer xxx&#10;token: xxx&#10;也支持 {"Authorization":"Bearer xxx"}'></textarea>
+              </label>
             </div>
             <div class="button-row">
               <button class="soft-btn" id="previewSiteApisBtn">测试抓取 API 数据源</button>
+              <button class="soft-btn" id="saveProductApiBtn">保存产品 API</button>
+              <button class="soft-btn" id="extractProductsBtn">AI 提取产品资产</button>
+              <button class="ghost-btn" id="syncProductsToMainPagesBtn">回填商业页面</button>
             </div>
             <pre id="siteApiPreview" class="markdown-box compact-box"></pre>
+            <div class="diagnosis-view product-assets-view" id="productAssetsView"></div>
+            <p class="inline-status" id="productAssetsStatus">产品资产可从 API 提取后缓存；没有产品 API 时，仍可手动填写商业页面。</p>
             <p class="api-warning">当前先保存为项目上下文，后续可以接接口自动抓主站商业页、主站博客和博客站文章，再反向优化关键词分站。</p>
           </details>
           <p class="inline-status" id="projectSaveStatus">项目定位和导入结果会自动保存到本机浏览器。</p>
@@ -439,7 +452,7 @@
             </div>
             <div class="button-row">
               <button class="soft-btn" id="loadContentSitePostsBtn">读取/刷新文章</button>
-              <button class="soft-btn" id="planContentOpportunitiesBtn">一键生成机会池</button>
+              <button class="soft-btn" id="planContentOpportunitiesBtn">AI 复核并生成机会池</button>
               <button class="soft-btn" id="selectTopOpportunitiesBtn">按数量勾选优先词</button>
               <button class="ghost-btn" id="clearOpportunitySelectionBtn">清空勾选</button>
               <button class="primary-btn" id="batchGenerateSelectedBtn">批量生成勾选文章</button>
@@ -716,6 +729,59 @@
               <h4>后续可继续接入</h4>
               <p>数据库保存项目、批量文章队列、人工审核状态、图片生成、WordPress/Shopify/Webflow 发布。</p>
             </div>
+          </div>
+
+          <div class="image-publisher-card">
+            <div class="panel-heading compact">
+              <h4>图片 API / 自动补图</h4>
+              <div class="button-row">
+                <button class="soft-btn" id="saveImageConfigBtn">保存图片配置</button>
+                <button class="soft-btn" id="testImageSearchBtn">测试搜图</button>
+              </div>
+            </div>
+            <div class="helper-copy">
+              上传文章时，系统会根据完整 Markdown 里的 <code>Image Placement Map</code> 或图片占位符自动搜索图片并插入正文。Pexels Key 会保存到服务端本地配置，不会提交到 Git。
+            </div>
+            <div class="image-provider-grid">
+              <label>
+                上传时自动补图
+                <select id="imageEnrichOnUploadInput">
+                  <option value="1">开启：上传前替换占位/插图</option>
+                  <option value="0">关闭：只上传原始 Markdown</option>
+                </select>
+              </label>
+              <label>
+                图片源
+                <select id="imageProviderInput">
+                  <option value="auto">自动选择已配置来源</option>
+                  <option value="pexels">Pexels</option>
+                  <option value="unsplash">Unsplash</option>
+                  <option value="pixabay">Pixabay</option>
+                </select>
+              </label>
+              <label>
+                每篇最多插入
+                <select id="imageMaxImagesInput">
+                  <option value="1">1 张</option>
+                  <option value="2" selected>2 张</option>
+                  <option value="3">3 张</option>
+                </select>
+              </label>
+              <label>
+                当前来源 API Key
+                <input id="imageApiKeyInput" type="password" placeholder="留空表示不修改现有 Key" autocomplete="off" />
+              </label>
+              <label>
+                测试关键词
+                <input id="imageTestQueryInput" type="text" placeholder="例如：portable vape device" />
+              </label>
+              <label class="checkbox-field">
+                <input id="clearImageApiKeyInput" type="checkbox" />
+                清除当前来源已保存的 Key
+              </label>
+            </div>
+            <p class="inline-status" id="imageConfigStatus">图片 API 尚未读取。</p>
+            <pre class="markdown-box compact-box" id="imageSearchOutput"></pre>
           </div>
 
           <div class="wp-publisher-card">

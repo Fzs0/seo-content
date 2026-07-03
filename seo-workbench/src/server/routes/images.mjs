@@ -1,6 +1,12 @@
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { methodNotAllowed, readJson, sendJson } from "../http.mjs";
 
 const PROVIDERS = ["pexels", "unsplash", "pixabay"];
+const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const configDir = join(projectRoot, "config");
+const imageProviderConfigPath = join(configDir, "image-providers.local.json");
 
 function clampNumber(value, fallback, min, max) {
   const numeric = Number(value);
@@ -8,17 +14,83 @@ function clampNumber(value, fallback, min, max) {
   return Math.max(min, Math.min(max, numeric));
 }
 
-function providerKey(provider) {
+function envProviderKey(provider) {
   if (provider === "pexels") return process.env.PEXELS_API_KEY || "";
   if (provider === "unsplash") return process.env.UNSPLASH_ACCESS_KEY || "";
   if (provider === "pixabay") return process.env.PIXABAY_API_KEY || "";
   return "";
 }
 
-function configuredProviders(preferred = "auto") {
+function secretPreview(value = "") {
+  const key = String(value || "").trim();
+  if (!key) return "";
+  if (key.length <= 8) return `${key.slice(0, 2)}...${key.slice(-2)}`;
+  return `${key.slice(0, 4)}...${key.slice(-4)}`;
+}
+
+async function readImageProviderConfig({ includeSecrets = false } = {}) {
+  let raw = {};
+  try {
+    raw = JSON.parse(await readFile(imageProviderConfigPath, "utf8"));
+  } catch {
+    raw = {};
+  }
+
+  const providers = {};
+  for (const provider of PROVIDERS) {
+    const localKey = String(raw.providers?.[provider]?.apiKey || "").trim();
+    const envKey = String(envProviderKey(provider) || "").trim();
+    const effectiveKey = localKey || envKey;
+    providers[provider] = {
+      enabled: Boolean(effectiveKey),
+      source: localKey ? "local" : envKey ? "env" : "",
+      keyPreview: secretPreview(effectiveKey),
+      ...(includeSecrets ? { apiKey: effectiveKey, localApiKey: localKey } : {}),
+    };
+  }
+
+  return {
+    version: 1,
+    defaultProvider: raw.defaultProvider || "auto",
+    providers,
+  };
+}
+
+async function writeImageProviderConfig(body = {}) {
+  const current = await readImageProviderConfig({ includeSecrets: true });
+  const next = {
+    version: 1,
+    defaultProvider: PROVIDERS.includes(body.defaultProvider) ? body.defaultProvider : body.defaultProvider === "auto" ? "auto" : current.defaultProvider,
+    providers: {},
+  };
+
+  for (const provider of PROVIDERS) {
+    const incoming = body.providers?.[provider] || (body.provider === provider ? body : {});
+    const currentLocalKey = current.providers?.[provider]?.localApiKey || "";
+    const apiKey = String(incoming.apiKey || "").trim();
+    next.providers[provider] = {
+      apiKey: incoming.clearApiKey ? "" : apiKey || currentLocalKey,
+    };
+  }
+
+  await mkdir(configDir, { recursive: true });
+  await writeFile(imageProviderConfigPath, `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  return readImageProviderConfig();
+}
+
+async function providerKey(provider) {
+  const config = await readImageProviderConfig({ includeSecrets: true });
+  return config.providers?.[provider]?.apiKey || "";
+}
+
+async function configuredProviders(preferred = "auto") {
   const requested = String(preferred || "auto").toLowerCase();
   const candidates = requested === "auto" ? PROVIDERS : [requested, ...PROVIDERS.filter((item) => item !== requested)];
-  return candidates.filter((provider) => PROVIDERS.includes(provider) && providerKey(provider));
+  const configured = [];
+  for (const provider of candidates) {
+    if (PROVIDERS.includes(provider) && (await providerKey(provider))) configured.push(provider);
+  }
+  return configured;
 }
 
 function imageUserAgent() {
@@ -95,7 +167,7 @@ function normalizePixabay(hit = {}) {
 }
 
 async function searchProvider(provider, query, perPage) {
-  const key = providerKey(provider);
+  const key = await providerKey(provider);
   if (!key) throw new Error(`${provider} is not configured.`);
 
   if (provider === "pexels") {
@@ -135,7 +207,7 @@ async function searchImages({ query, provider = "auto", perPage = 6 } = {}) {
   const cleanQuery = String(query || "").trim();
   if (!cleanQuery) throw new Error("Image query is required.");
   const limit = clampNumber(perPage, 6, 1, 20);
-  const providers = configuredProviders(provider);
+  const providers = await configuredProviders(provider);
   if (!providers.length) {
     throw new Error("No image provider is configured. Set PEXELS_API_KEY, UNSPLASH_ACCESS_KEY, or PIXABAY_API_KEY.");
   }
@@ -173,7 +245,10 @@ function parseImagePlan(markdown = "") {
     .map((line) => line.replace(/^[-*]\s*/, "").trim())
     .filter(Boolean)
     .map((line, index) => {
-      const alt = /alt\s*=\s*"([^"]+)"/i.exec(line)?.[1] || "";
+      const alt =
+        /(?:alt|alt tag)\s*(?:=|:|：)\s*"([^"]+)"/i.exec(line)?.[1] ||
+        /(?:alt|alt tag)\s*(?:=|:|：)\s*([^.;。]+)/i.exec(line)?.[1]?.trim() ||
+        "";
       const [name = `Image ${index + 1}`, position = ""] = line.split(/[：:]/);
       return { name: name.trim(), position: position.trim(), alt };
     });
@@ -255,7 +330,7 @@ export async function enrichMarkdownWithImages(body = {}) {
   const entries = [];
   const warnings = [];
   for (const target of targets) {
-    const query = [keyword, target.name]
+    const query = [keyword, target.alt || target.name]
       .filter(Boolean)
       .join(" ")
       .replace(/\s+/g, " ")
@@ -290,12 +365,22 @@ export async function enrichMarkdownWithImages(body = {}) {
 }
 
 export async function handleImagesRoute(request, response, pathname) {
+  if (request.method === "GET" && pathname === "/api/images/config") {
+    sendJson(response, 200, await readImageProviderConfig());
+    return true;
+  }
+
   if (request.method !== "POST") {
     methodNotAllowed(response);
     return true;
   }
 
   const body = await readJson(request);
+  if (pathname === "/api/images/config") {
+    sendJson(response, 200, { ok: true, config: await writeImageProviderConfig(body) });
+    return true;
+  }
+
   if (pathname === "/api/images/search") {
     sendJson(response, 200, { ok: true, ...(await searchImages(body)) });
     return true;

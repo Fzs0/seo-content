@@ -786,12 +786,17 @@ export async function handleWpSitesRoute(request, response, pathname) {
 
   if (pathname === "/api/wp-sites/upload") {
     const site = getWpSite(body.siteId, { includeSecrets: true });
-    const result = await uploadArticle(site, body.content || "", {
+    const uploadBody = {
+      ...body,
+      imageKeywords: [body.imageKeyword || body.title || ""],
+    };
+    const contents = await enrichContentsForUpload([body.content || ""], uploadBody);
+    const result = await uploadArticle(site, contents[0] || body.content || "", {
       status: body.status,
       categoryId: body.categoryId,
       slug: body.slug,
     });
-    sendJson(response, 200, result);
+    sendJson(response, 200, { ...result, imageWarnings: uploadBody.imageWarnings || [] });
     return true;
   }
 

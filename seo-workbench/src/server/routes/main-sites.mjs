@@ -2,6 +2,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { deleteMainSite, getMainSite, normalizeApiBaseUrl, readMainSites, saveMainSite } from "../main-sites-store.mjs";
 import { methodNotAllowed, readJson, sendJson } from "../http.mjs";
+import { enrichMarkdownWithImages } from "./images.mjs";
 
 const MAIN_POSTS_LIST_CACHE_TTL_MS = 5 * 60 * 1000;
 const MAIN_POSTS_LIST_FORCE_COOLDOWN_MS = 60 * 1000;
@@ -175,6 +176,10 @@ function inlineMarkdownToHtml(text = "") {
     .replace(/\[([^\]]+)]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2">$1</a>');
 }
 
+function imageHtml(alt = "", url = "") {
+  return `<figure><img src="${inlineMarkdownToHtml(url)}" alt="${inlineMarkdownToHtml(alt)}"/></figure>`;
+}
+
 function markdownToHtml(markdown = "") {
   const lines = String(markdown || "").split(/\r?\n/);
   const html = [];
@@ -199,6 +204,12 @@ function markdownToHtml(markdown = "") {
       html.push(`<h${level}>${inlineMarkdownToHtml(heading[2])}</h${level}>`);
       continue;
     }
+    const image = /^!\[([^\]]*)]\((https?:\/\/[^)\s]+)\)$/.exec(line);
+    if (image) {
+      flushParagraph();
+      html.push(imageHtml(image[1], image[2]));
+      continue;
+    }
     if (/^[-*]\s+/.test(line)) {
       flushParagraph();
       html.push(`<ul><li>${inlineMarkdownToHtml(line.replace(/^[-*]\s+/, ""))}</li></ul>`);
@@ -208,6 +219,32 @@ function markdownToHtml(markdown = "") {
   }
   flushParagraph();
   return html.join("\n");
+}
+
+async function enrichContentForUpload(content = "", body = {}) {
+  if (!body.enrichImages) {
+    return { content, imageWarnings: [], images: [] };
+  }
+
+  try {
+    const result = await enrichMarkdownWithImages({
+      markdown: content,
+      keyword: body.imageKeyword || "",
+      provider: body.imageProvider || "auto",
+      maxImages: body.maxImagesPerArticle || 2,
+    });
+    return {
+      content: result.markdown || content,
+      imageWarnings: result.warnings || [],
+      images: result.images || [],
+    };
+  } catch (error) {
+    return {
+      content,
+      imageWarnings: [error.message],
+      images: [],
+    };
+  }
 }
 
 function splitKeywords(value = "") {
@@ -473,12 +510,13 @@ export async function handleMainSitesRoute(request, response, pathname) {
 
   if (pathname === "/api/main-sites/upload") {
     const site = getMainSite(body.siteId, { includeSecrets: true });
-    const payload = articlePayloadFromMarkdown(site, body.content || "", body.override || {});
+    const enriched = await enrichContentForUpload(body.content || "", body);
+    const payload = articlePayloadFromMarkdown(site, enriched.content || body.content || "", body.override || {});
     const { data: result, debug } = await requestMain(site, "/posts", {
       method: "POST",
       body: JSON.stringify(payload),
     });
-    sendJson(response, 200, { ok: true, result, debug, payloadPreview: payload });
+    sendJson(response, 200, { ok: true, result, debug, payloadPreview: payload, imageWarnings: enriched.imageWarnings, images: enriched.images });
     return true;
   }
 

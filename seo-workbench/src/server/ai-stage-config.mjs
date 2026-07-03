@@ -15,6 +15,15 @@ export const DEFAULT_AI_STAGES = {
     endpoint: "/api/generate",
     temperature: 0.2,
   },
+  productExtraction: {
+    label: "产品资产提取",
+    provider: "deepseek",
+    apiFormat: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+    model: "deepseek-v4-flash",
+    endpoint: "/api/generate",
+    temperature: 0.1,
+  },
   briefGeneration: {
     label: "AI 增强 Brief",
     provider: "local",

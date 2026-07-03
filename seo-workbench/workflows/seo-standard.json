@@ -41,6 +41,7 @@
     "seedKeyword": ["seed keyword", "seed", "种子词"],
     "pageGroup": ["page", "页面", "page group", "cluster page"],
     "sourcePageType": ["page type", "semrush page type", "source page type"],
+    "serpFeatures": ["serp features", "serp feature", "features", "search features", "google serp features"],
     "url": ["url", "page url", "landing page", "target url", "ranking url", "existing url"]
   },
   "signals": {
