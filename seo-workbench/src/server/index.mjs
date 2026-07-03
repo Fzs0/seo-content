@@ -6,6 +6,7 @@ import { handleAiStagesRoute } from "./routes/ai-stages.mjs";
 import { handleArticlesRoute } from "./routes/articles.mjs";
 import { handleBlogSitesRoute } from "./routes/blog-sites.mjs";
 import { handleGenerateRoute } from "./routes/generate.mjs";
+import { handleGoogleDataRoute } from "./routes/google-data.mjs";
 import { handleMainSitesRoute } from "./routes/main-sites.mjs";
 import { handleSiteSnapshotRoute } from "./routes/site-snapshot.mjs";
 import { handleTodosRoute } from "./routes/todos.mjs";
@@ -15,6 +16,15 @@ import { sendJson, sendText } from "./http.mjs";
 
 const projectRoot = fileURLToPath(new URL("../../", import.meta.url));
 const defaultPort = Number(process.env.PORT || 5177);
+const appRoutePaths = new Set([
+  "/page-setup",
+  "/page-keywords",
+  "/page-intelligence",
+  "/page-review",
+  "/page-production",
+  "/page-publishing",
+  "/page-todos",
+]);
 
 const mimeTypes = {
   ".html": "text/html; charset=utf-8",
@@ -40,6 +50,7 @@ function isBlockedStaticPath(pathname) {
 async function serveStatic(request, response) {
   const url = new URL(request.url, `http://${request.headers.host}`);
   const pathname = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
+  const routePathname = pathname.replace(/\/+$/g, "") || "/";
 
   if (isBlockedStaticPath(pathname)) {
     sendText(response, 403, "Forbidden");
@@ -60,6 +71,15 @@ async function serveStatic(request, response) {
     });
     response.end(file);
   } catch {
+    if (appRoutePaths.has(routePathname)) {
+      const file = await readFile(join(projectRoot, "index.html"));
+      response.writeHead(200, {
+        "Content-Type": mimeTypes[".html"],
+        "Cache-Control": "no-store",
+      });
+      response.end(file);
+      return;
+    }
     sendText(response, 404, "Not found");
   }
 }
@@ -96,6 +116,11 @@ export function createSeoWorkbenchServer() {
 
       if (url.pathname === "/api/site-snapshot") {
         await handleSiteSnapshotRoute(request, response);
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/google-data-sources")) {
+        await handleGoogleDataRoute(request, response, url.pathname);
         return;
       }
 

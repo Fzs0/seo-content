@@ -18,12 +18,13 @@
         </div>
 
         <nav class="page-nav" aria-label="Workbench pages">
-          <a href="#page-setup" data-page-target="setup">项目设置</a>
-          <a href="#page-keywords" data-page-target="keywords">关键词池</a>
-          <a href="#page-intelligence" data-page-target="intelligence">内容中枢</a>
-          <a href="#page-production" data-page-target="production">生产</a>
-          <a href="#page-publishing" data-page-target="publishing">发布</a>
-          <a href="#page-todos" data-page-target="todos">待办</a>
+          <a href="/page-setup" data-page-target="setup">项目设置</a>
+          <a href="/page-keywords" data-page-target="keywords">关键词池</a>
+          <a href="/page-intelligence" data-page-target="intelligence">内容中枢</a>
+          <a href="/page-review" data-page-target="review">复盘数据</a>
+          <a href="/page-production" data-page-target="production">生产</a>
+          <a href="/page-publishing" data-page-target="publishing">发布</a>
+          <a href="/page-todos" data-page-target="todos">待办</a>
         </nav>
 
         <nav class="step-nav">
@@ -234,6 +235,112 @@
             </div>
           </div>
           <p class="inline-status" id="standardStatus"></p>
+        </section>
+
+        <section class="panel" id="review-data">
+          <div class="review-view-tabs">
+            <button class="active" type="button">All Views</button>
+            <button type="button">Executive View</button>
+            <button type="button">SEO Analyst View</button>
+            <button type="button">Action Plan View</button>
+          </div>
+          <div class="review-hero">
+            <div class="review-hero-copy">
+              <p class="eyebrow">Monthly SEO Review Dashboard</p>
+              <h3>SEO 月度复盘看板</h3>
+              <p>
+                按视频里的复盘方式：GSC 看需求、曝光、点击、平均排名；GA4 看访客质量与来源价值；最后把数据落到下月 Action Plan。
+              </p>
+            </div>
+            <div class="review-hero-actions">
+              <button class="soft-btn" id="reloadGoogleDataSourcesBtn">重新读取数据源</button>
+              <button class="soft-btn" id="saveGoogleDataSourceBtn">保存配置</button>
+              <button class="soft-btn" id="testGoogleDataSourceBtn">测试连接</button>
+              <button class="primary-btn" id="loadGoogleReviewDataBtn">生成复盘看板</button>
+            </div>
+          </div>
+
+          <div class="review-data-results" id="googleReviewResults"></div>
+          <details class="review-raw-box">
+            <summary>查看原始 JSON 数据</summary>
+            <pre class="markdown-box compact-box" id="googleReviewRawOutput"></pre>
+          </details>
+
+          <details class="review-config-drawer">
+            <summary>数据源配置 / 连接状态</summary>
+          <div class="review-command-grid">
+            <article class="review-config-card">
+              <div class="review-card-heading">
+                <span>01</span>
+                <div>
+                  <strong>数据源配置</strong>
+                  <p>只保存到本机 local 配置，不提交到 Git。</p>
+                </div>
+              </div>
+              <div class="review-data-grid compact">
+                <label>
+                  已保存数据源
+                  <select id="googleDataSourceSelect">
+                    <option value="">新建 Google 数据源</option>
+                  </select>
+                </label>
+                <label>
+                  数据源名称
+                  <input id="googleDataSourceNameInput" type="text" placeholder="例如：Exdivo US / HealthyOxy DE" />
+                </label>
+                <label class="review-wide-field">
+                  GSC 站点地址
+                  <input id="gscSiteUrlInput" type="text" placeholder="例如：https://example.com/ 或 sc-domain:example.com" />
+                </label>
+                <label>
+                  GA4 Property ID
+                  <input id="ga4PropertyIdInput" type="text" placeholder="例如：123456789，不需要 properties/" />
+                </label>
+                <label class="review-wide-field">
+                  Google API 代理地址
+                  <input id="googleProxyUrlInput" type="text" placeholder="例如：http://127.0.0.1:7897" />
+                </label>
+                <label>
+                  默认开始日期
+                  <input id="googleDataStartInput" type="date" />
+                </label>
+                <label>
+                  默认结束日期
+                  <input id="googleDataEndInput" type="date" />
+                </label>
+              </div>
+              <details class="review-secret-box">
+                <summary>服务账号 JSON 密钥</summary>
+                <div class="review-data-grid compact">
+                  <label>
+                    上传 JSON
+                    <input id="googleServiceAccountFileInput" type="file" accept=".json,application/json" />
+                  </label>
+                  <label>
+                    或粘贴 JSON
+                    <textarea id="googleServiceAccountJsonInput" rows="5" placeholder='{"type":"service_account","client_email":"...","private_key":"..."}'></textarea>
+                  </label>
+                </div>
+              </details>
+            </article>
+
+            <aside class="review-status-card">
+              <div class="review-card-heading">
+                <span>02</span>
+                <div>
+                  <strong>复盘流程</strong>
+                  <p>先拉真实数据，再做判断。</p>
+                </div>
+              </div>
+              <ol class="review-flow-list">
+                <li><strong>GSC</strong><span>确认查询词、页面、点击、展现、平均排名。</span></li>
+                <li><strong>GA4</strong><span>确认页面访问质量和用户参与情况。</span></li>
+                <li><strong>Action</strong><span>决定更新旧文、扩新主题、优化承接链路。</span></li>
+              </ol>
+              <p class="inline-status" id="googleDataStatus">尚未配置 Google 复盘数据源。</p>
+            </aside>
+          </div>
+          </details>
         </section>
 
         <section class="panel" id="keywords">

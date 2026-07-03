@@ -65,7 +65,7 @@ const API_FORMATS = [
 ];
 const WORKSPACE_DRAFT_KEY = "seo-workbench.workspaceDraft.v1";
 const CUSTOM_OPTION_VALUE = "__custom__";
-const CONTENT_HUB_AUTO_RELOAD_TTL_MS = 15000;
+const CONTENT_HUB_AUTO_RELOAD_TTL_MS = 5 * 60 * 1000;
 
 const contentHubLoadState = {
   requestKey: "",
@@ -103,6 +103,9 @@ const state = {
   selectedMainSiteId: "",
   mainPosts: [],
   mainDiagnosis: "",
+  googleDataSources: [],
+  selectedGoogleDataSourceId: "",
+  googleReviewData: null,
   activePage: "setup",
   contentHub: {
     source: "blog",
@@ -132,10 +135,26 @@ const PAGE_CONFIG = {
   setup: ["project", "standard", "ai-stages"],
   keywords: ["keywords", "allocation"],
   intelligence: ["content-hub"],
+  review: ["review-data"],
   production: ["brief", "generation"],
   publishing: ["exports"],
   todos: ["todos"],
 };
+
+const PAGE_ROUTES = {
+  "/": "setup",
+  "/page-setup": "setup",
+  "/page-keywords": "keywords",
+  "/page-intelligence": "intelligence",
+  "/page-review": "review",
+  "/page-production": "production",
+  "/page-publishing": "publishing",
+  "/page-todos": "todos",
+};
+
+function routeForPage(page = "setup") {
+  return Object.entries(PAGE_ROUTES).find(([, value]) => value === page && value !== "setup")?.[0] || "/page-setup";
+}
 
 function pageForSection(sectionId = "") {
   return Object.entries(PAGE_CONFIG).find(([, sections]) => sections.includes(sectionId))?.[0] || "setup";
@@ -148,7 +167,8 @@ function applyActivePage(page = state.activePage) {
 
   const visible = new Set(PAGE_CONFIG[nextPage]);
   document.querySelectorAll("main.content > section").forEach((section) => {
-    const alwaysVisible = section.classList.contains("hero") || section.classList.contains("metric-grid");
+    const alwaysVisible =
+      nextPage !== "review" && (section.classList.contains("hero") || section.classList.contains("metric-grid"));
     section.classList.toggle("content-page-hidden", !alwaysVisible && !visible.has(section.id));
   });
 
@@ -157,7 +177,8 @@ function applyActivePage(page = state.activePage) {
   });
 }
 
-function activatePageForHash(hash = window.location.hash) {
+function activatePageForLocation() {
+  const hash = window.location.hash;
   const cleanHash = String(hash || "").replace(/^#/, "");
   if (cleanHash.startsWith("page-")) {
     applyActivePage(cleanHash.replace(/^page-/, ""));
@@ -167,6 +188,13 @@ function activatePageForHash(hash = window.location.hash) {
   if (cleanHash && document.getElementById(cleanHash)) {
     applyActivePage(pageForSection(cleanHash));
     requestAnimationFrame(() => document.getElementById(cleanHash)?.scrollIntoView({ block: "start" }));
+    return;
+  }
+
+  const pathname = window.location.pathname.replace(/\/+$/g, "") || "/";
+  const routePage = PAGE_ROUTES[pathname];
+  if (routePage) {
+    applyActivePage(routePage);
     return;
   }
 
@@ -1523,7 +1551,7 @@ async function useContentOpportunity(opportunityId) {
   state.contentHub.activeOpportunity = opportunity;
   state.selectedId = opportunity.keywordId;
   applyActivePage("production");
-  history.replaceState(null, "", "#generation");
+  history.replaceState(null, "", "/page-production#generation");
   await refreshSelected();
   document.getElementById("generation")?.scrollIntoView({ block: "start" });
 }
@@ -2819,6 +2847,418 @@ function renderTodos() {
   });
 }
 
+function selectedGoogleDataSource() {
+  return state.googleDataSources.find((source) => source.id === state.selectedGoogleDataSourceId) || null;
+}
+
+function renderGoogleDataSources() {
+  const select = $("googleDataSourceSelect");
+  if (!select) return;
+
+  const current = selectedGoogleDataSource();
+  select.innerHTML = `<option value="">新建 Google 数据源</option>${state.googleDataSources
+    .map((source) => `<option value="${escapeHtml(source.id)}">${escapeHtml(source.name || source.gscSiteUrl || "Google 数据源")}</option>`)
+    .join("")}`;
+  select.value = state.selectedGoogleDataSourceId || "";
+
+  $("googleDataSourceNameInput").value = current?.name || "";
+  $("gscSiteUrlInput").value = current?.gscSiteUrl || "";
+  $("ga4PropertyIdInput").value = current?.ga4PropertyId || "";
+  $("googleProxyUrlInput").value = "";
+  $("googleProxyUrlInput").placeholder = current?.googleProxyUrlSet
+    ? `已保存：${current.googleProxyUrlPreview || "代理地址"}，留空则继续使用`
+    : "例如：http://127.0.0.1:7897";
+  $("googleDataStartInput").value = current?.defaultStartDate || "";
+  $("googleDataEndInput").value = current?.defaultEndDate || "";
+  $("googleServiceAccountJsonInput").value = "";
+  $("googleServiceAccountJsonInput").placeholder = current?.serviceAccountSet
+    ? `已保存：${current.serviceAccountEmail || "service account"}，留空则继续使用`
+    : '{"type":"service_account","client_email":"...","private_key":"..."}';
+
+  if (current?.serviceAccountSet) {
+    $("googleDataStatus").textContent = `已选择数据源：${current.name}。服务账号：${current.serviceAccountEmail || "已保存"}。`;
+  } else if (state.googleDataSources.length) {
+    $("googleDataStatus").textContent = "请选择一个已保存数据源，或新建一个 Google 数据源。";
+  }
+
+  renderGoogleReviewData();
+}
+
+function formatNumber(value = 0) {
+  const number = Number(value || 0);
+  if (number >= 1000000) return `${(number / 1000000).toFixed(1)}M`;
+  if (number >= 1000) return `${(number / 1000).toFixed(1)}K`;
+  return String(Math.round(number));
+}
+
+function sumRows(rows = [], key = "clicks") {
+  return rows.reduce((total, row) => total + Number(row[key] || 0), 0);
+}
+
+function averageRows(rows = [], key = "position") {
+  const values = rows.map((row) => Number(row[key] || 0)).filter((value) => Number.isFinite(value) && value > 0);
+  if (!values.length) return 0;
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function gscOpportunityRows(rows = []) {
+  return [...rows]
+    .filter((row) => Number(row.impressions || 0) >= 10)
+    .sort((a, b) => {
+      const aScore = Number(a.impressions || 0) * Math.max(Number(a.position || 99) - 3, 1);
+      const bScore = Number(b.impressions || 0) * Math.max(Number(b.position || 99) - 3, 1);
+      return bScore - aScore;
+    })
+    .slice(0, 8);
+}
+
+function reviewRowList(rows = [], type = "query") {
+  if (!rows.length) return `<li class="review-empty-row">暂无${type === "query" ? "查询词" : "页面"}数据。</li>`;
+  return rows
+    .map((row, index) => {
+      const key = row.keys?.[0] || row.pagePath || row.pageTitle || "";
+      const ctr = ((Number(row.ctr || 0)) * 100).toFixed(2);
+      const position = Number(row.position || 0).toFixed(1);
+      return `
+        <li class="review-rank-row">
+          <span class="review-rank-index">${index + 1}</span>
+          <span class="review-rank-main">${escapeHtml(key)}</span>
+          <span>${formatNumber(row.clicks)} clicks</span>
+          <span>${formatNumber(row.impressions)} impr.</span>
+          <span>${ctr}% CTR</span>
+          <span>Pos ${position}</span>
+        </li>
+      `;
+    })
+    .join("");
+}
+
+function barColor(index = 0) {
+  return ["#2f7668", "#4f6ee8", "#7b3fe4", "#b57b2e", "#b6422f", "#4e8c57", "#d22d73"][index % 7];
+}
+
+function reviewBarList(rows = [], valueKey = "impressions") {
+  if (!rows.length) return `<li class="review-empty-row">暂无可绘制的数据。</li>`;
+  const max = Math.max(...rows.map((row) => Number(row[valueKey] || 0)), 1);
+  return rows
+    .slice(0, 10)
+    .map((row, index) => {
+      const label = row.keys?.[0] || row.pagePath || row.pageTitle || "";
+      const value = Number(row[valueKey] || 0);
+      const width = Math.max(4, Math.round((value / max) * 100));
+      return `
+        <li class="review-bar-row">
+          <span class="review-bar-label">${escapeHtml(label)}</span>
+          <span class="review-bar-track"><i style="width:${width}%; background:${barColor(index)}"></i></span>
+          <strong>${formatNumber(value)}</strong>
+        </li>
+      `;
+    })
+    .join("");
+}
+
+function ga4RowList(rows = []) {
+  if (!rows.length) return `<li class="review-empty-row">暂无 GA4 页面数据。</li>`;
+  return rows
+    .slice(0, 8)
+    .map((row, index) => {
+      const engagement = ((Number(row.engagementRate || 0)) * 100).toFixed(1);
+      return `
+        <li class="review-rank-row">
+          <span class="review-rank-index">${index + 1}</span>
+          <span class="review-rank-main">${escapeHtml(row.pagePath || row.pageTitle || "页面")}</span>
+          <span>${formatNumber(row.sessions)} sessions</span>
+          <span>${formatNumber(row.activeUsers)} users</span>
+          <span>${engagement}% engagement</span>
+        </li>
+      `;
+    })
+    .join("");
+}
+
+function dashboardMetric(label, value, note = "", color = "#2f7668") {
+  return `
+    <article class="review-report-metric" style="--metric-color:${color}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(note)}</small>
+    </article>
+  `;
+}
+
+function minutesSeconds(seconds = 0) {
+  const value = Math.round(Number(seconds || 0));
+  if (!value) return "0s";
+  const minutes = Math.floor(value / 60);
+  const rest = value % 60;
+  return minutes ? `${minutes}m ${rest}s` : `${rest}s`;
+}
+
+function reportDataTable(headers = [], rows = []) {
+  return `
+    <div class="review-report-table-wrap">
+      <table class="review-report-table">
+        <thead><tr>${headers.map((header) => `<th>${escapeHtml(header)}</th>`).join("")}</tr></thead>
+        <tbody>
+          ${
+            rows.length
+              ? rows
+                  .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join("")}</tr>`)
+                  .join("")
+              : `<tr><td colspan="${headers.length}">暂无数据</td></tr>`
+          }
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function gscRowsForTable(rows = []) {
+  return rows.slice(0, 12).map((row) => [
+    row.keys?.[0] || "-",
+    formatNumber(row.clicks),
+    formatNumber(row.impressions),
+    `${((Number(row.ctr || 0)) * 100).toFixed(2)}%`,
+    Number(row.position || 0).toFixed(1),
+  ]);
+}
+
+function ga4RowsForTable(rows = []) {
+  return rows.slice(0, 12).map((row) => [
+    row.pagePath || row.pageTitle || "-",
+    formatNumber(row.activeUsers),
+    formatNumber(row.sessions),
+    `${((Number(row.engagementRate || 0)) * 100).toFixed(1)}%`,
+    minutesSeconds(row.averageSessionDuration),
+  ]);
+}
+
+function buildReviewActions(data) {
+  const opportunity = gscOpportunityRows(data.gscQueries?.rows || [])[0];
+  const strongPage = [...(data.gscPages?.rows || [])].sort((a, b) => Number(b.clicks || 0) - Number(a.clicks || 0))[0];
+  const qualityPage = [...(data.ga4Pages?.rows || [])].sort((a, b) => Number(b.sessions || 0) - Number(a.sessions || 0))[0];
+  return [
+    {
+      title: "优先补强排名有苗头的词",
+      detail: opportunity
+        ? `${opportunity.keys?.[0] || "机会词"} 有 ${formatNumber(opportunity.impressions)} 展现，平均排名 ${Number(opportunity.position || 0).toFixed(1)}，适合补内容深度、FAQ 和内链。`
+        : "暂无足够查询词数据，先扩大日期范围或确认 GSC 资源。",
+    },
+    {
+      title: "用高点击页面反推内容资产",
+      detail: strongPage
+        ? `${strongPage.keys?.[0] || "高点击页面"} 已经拿到 ${formatNumber(strongPage.clicks)} 点击，适合做相关主题集群和内部链接。`
+        : "暂无页面点击数据，先等待 GSC 收录或拉长周期。",
+    },
+    {
+      title: "用 GA4 判断页面是否值得继续加码",
+      detail: qualityPage
+        ? `${qualityPage.pagePath || qualityPage.pageTitle || "高访问页面"} 有 ${formatNumber(qualityPage.sessions)} sessions，建议结合参与率判断是否更新或加 CTA。`
+        : "暂无 GA4 页面质量数据，可先检查 Property ID 和权限。",
+    },
+  ];
+}
+
+function renderGoogleReviewData() {
+  const container = $("googleReviewResults");
+  const raw = $("googleReviewRawOutput");
+  if (!container || !raw) return;
+
+  const data = state.googleReviewData;
+  if (!data) {
+    container.innerHTML = `
+      <div class="review-empty-state">
+        <span>DATA</span>
+        <strong>还没有复盘数据</strong>
+        <p>先保存数据源并测试连接，再点击“生成复盘看板”。看板会把 GSC 和 GA4 转成可行动的月度复盘视图。</p>
+      </div>
+    `;
+    raw.textContent = "";
+    return;
+  }
+
+  const queryRows = data.gscQueries?.rows || [];
+  const pageRows = data.gscPages?.rows || [];
+  const ga4Rows = data.ga4Pages?.rows || [];
+  const actions = buildReviewActions(data);
+  const topGa4 = [...ga4Rows].sort((a, b) => Number(b.sessions || 0) - Number(a.sessions || 0))[0];
+  const activeUsers = sumRows(ga4Rows, "activeUsers");
+  const sessions = sumRows(ga4Rows, "sessions");
+  const pageViews = sessions;
+  const avgEngagement = averageRows(ga4Rows, "engagementRate");
+  const avgSessionDuration = averageRows(ga4Rows, "averageSessionDuration");
+  const coreKeywords = new Set(queryRows.map((row) => row.keys?.[0]).filter(Boolean)).size;
+  const dailyClicks = data.dateRange?.startDate && data.dateRange?.endDate
+    ? (sumRows(queryRows, "clicks") / Math.max(1, (new Date(data.dateRange.endDate) - new Date(data.dateRange.startDate)) / 86400000 + 1)).toFixed(1)
+    : "0";
+
+  container.innerHTML = `
+    <section class="review-source-strip">
+      <article><strong>GSC</strong><span>已接入：查询词 / 页面 / 点击 / 展现 / 排名</span></article>
+      <article><strong>GA4</strong><span>已接入：sessions / active users / engagement / avg time</span></article>
+      <article class="pending"><strong>DataForSEO / Semrush</strong><span>待接入：当前排名、竞品、SERP 类型</span></article>
+      <article class="pending"><strong>Inquiry / Sales</strong><span>待接入：询盘、订单、成交价值</span></article>
+    </section>
+
+    <section class="review-report-section">
+      <div class="review-report-section-head">
+        <p>SEARCH DEMAND & RANK VALIDATION</p>
+        <h4>搜索需求 + 排名校验</h4>
+        <span>GSC 负责确认真实搜索需求，排名数据用于判断哪些词已经有苗头、哪些词需要补强页面。</span>
+      </div>
+      <div class="review-report-metrics">
+        ${dashboardMetric("PAGES CRAWLED", formatNumber(pageRows.length), "GSC 页面数", "#2f7668")}
+        ${dashboardMetric("CORE KEYWORDS", formatNumber(coreKeywords), "查询词数量", "#4f6ee8")}
+        ${dashboardMetric("GSC CLICKS", formatNumber(sumRows(queryRows, "clicks")), "本月点击", "#7b3fe4")}
+        ${dashboardMetric("DAILY CLICKS", String(dailyClicks), "点击 / 天", "#4e8c57")}
+        ${dashboardMetric("GSC IMPRESSIONS", formatNumber(sumRows(queryRows, "impressions")), "本月曝光", "#b57b2e")}
+        ${dashboardMetric("GSC AVG POSITION", averageRows(queryRows, "position").toFixed(1), "平均排名", "#101827")}
+        ${dashboardMetric("RANK FOUND", formatNumber(gscOpportunityRows(queryRows).length), "机会词", "#2f7668")}
+      </div>
+      <div class="review-report-two-col">
+        <article class="review-report-card">
+          <h5>GSC 月度数据结构</h5>
+          <p>把点击、曝光、核心关键词和机会词放在一起看，不只看单个指标。</p>
+          <ul class="review-bar-list">
+            ${reviewBarList([
+              { keys: ["Site Clicks"], impressions: sumRows(queryRows, "clicks") },
+              { keys: ["Site Impressions"], impressions: sumRows(queryRows, "impressions") },
+              { keys: ["Core KW Impr."], impressions: sumRows(gscOpportunityRows(queryRows), "impressions") },
+              { keys: ["Core KW Clicks"], impressions: sumRows(gscOpportunityRows(queryRows), "clicks") },
+              { keys: ["Core KW Found"], impressions: gscOpportunityRows(queryRows).length },
+            ], "impressions")}
+          </ul>
+        </article>
+        <article class="review-report-card">
+          <h5>核心机会词 Top 10</h5>
+          <p>优先看有曝光、平均排名 4-20、但点击还没吃满的词。</p>
+          <ul class="review-bar-list">${reviewBarList(gscOpportunityRows(queryRows), "impressions")}</ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="review-report-section">
+      <div class="review-report-section-head">
+        <p>BEHAVIOR & SOURCE QUALITY</p>
+        <h4>站内访客质量 + 来源价值</h4>
+        <span>GA4 负责判断用户进站后是否留下来、来自哪些渠道、哪些页面真正接住访问。</span>
+      </div>
+      <div class="review-report-metrics">
+        ${dashboardMetric("GA4 ACTIVE USERS", formatNumber(activeUsers), "独立访客", "#2f7668")}
+        ${dashboardMetric("GA4 SESSIONS", formatNumber(sessions), "站内访问会话", "#4f6ee8")}
+        ${dashboardMetric("GA4 PAGE VIEWS", formatNumber(pageViews), "页面浏览", "#101827")}
+        ${dashboardMetric("ENGAGEMENT RATE", `${(avgEngagement * 100).toFixed(1)}%`, "参与会话占比", "#4e8c57")}
+        ${dashboardMetric("AVG SESSION TIME", minutesSeconds(avgSessionDuration), "平均停留", "#7b3fe4")}
+        ${dashboardMetric("TOP LANDING PAGE", topGa4?.pagePath || "/", "最高入口页", "#101827")}
+        ${dashboardMetric("CORE PAGES WITH TRAFFIC", formatNumber(ga4Rows.length), "有流量页面", "#b57b2e")}
+      </div>
+      <div class="review-report-two-col">
+        <article class="review-report-card">
+          <h5>页面访问质量 Top 10</h5>
+          <p>按 sessions 判断哪些页面值得继续加 CTA、内链和内容模块。</p>
+          <ul class="review-bar-list">${reviewBarList(ga4Rows.slice(0, 10), "sessions")}</ul>
+        </article>
+        <article class="review-report-card">
+          <h5>核心页面接待访问</h5>
+          <p>用 GSC 页面点击和 GA4 sessions 交叉判断真正有价值的入口。</p>
+          <ul class="review-bar-list">${reviewBarList(pageRows.slice(0, 10), "clicks")}</ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="review-report-section">
+      <div class="review-report-section-head">
+        <p>DETAIL TABLES</p>
+        <h4>运营明细表</h4>
+        <span>这里保留可排查的明细：查询词、页面、点击、曝光、参与率。后续可继续接 Semrush/DataForSEO/询盘数据。</span>
+      </div>
+      <div class="review-report-two-col">
+        <article class="review-report-card">
+          <h5>GSC 查询词明细</h5>
+          ${reportDataTable(["QUERY", "CLICKS", "IMPRESSIONS", "CTR", "AVG POSITION"], gscRowsForTable(queryRows))}
+        </article>
+        <article class="review-report-card">
+          <h5>GA4 页面明细</h5>
+          ${reportDataTable(["PAGE", "ACTIVE USERS", "SESSIONS", "ENGAGEMENT", "AVG TIME"], ga4RowsForTable(ga4Rows))}
+        </article>
+      </div>
+    </section>
+
+    <section class="review-report-section">
+      <div class="review-report-section-head">
+        <p>ACTION PLAN VIEW</p>
+        <h4>下月 Action Plan 草案</h4>
+        <span>先根据当前数据自动生成可执行方向，后续可再接 AI 产出完整复盘报告。</span>
+      </div>
+      <ol class="review-action-list review-action-list-report">
+        ${actions.map((action) => `<li><strong>${escapeHtml(action.title)}</strong><span>${escapeHtml(action.detail)}</span></li>`).join("")}
+      </ol>
+    </section>
+  `;
+  raw.textContent = JSON.stringify(data, null, 2);
+}
+
+async function readGoogleServiceAccountJson() {
+  const file = $("googleServiceAccountFileInput")?.files?.[0];
+  if (file) return file.text();
+  return $("googleServiceAccountJsonInput").value.trim();
+}
+
+async function readGoogleDataSourceForm() {
+  return {
+    id: state.selectedGoogleDataSourceId || "",
+    name: $("googleDataSourceNameInput").value.trim(),
+    gscSiteUrl: $("gscSiteUrlInput").value.trim(),
+    ga4PropertyId: $("ga4PropertyIdInput").value.trim(),
+    googleProxyUrl: $("googleProxyUrlInput").value.trim(),
+    defaultStartDate: $("googleDataStartInput").value,
+    defaultEndDate: $("googleDataEndInput").value,
+    serviceAccountJson: await readGoogleServiceAccountJson(),
+  };
+}
+
+async function loadGoogleDataSources() {
+  const data = await api("/api/google-data-sources");
+  state.googleDataSources = data.sources || [];
+  if (!state.selectedGoogleDataSourceId && state.googleDataSources[0]) {
+    state.selectedGoogleDataSourceId = state.googleDataSources[0].id;
+  }
+  renderGoogleDataSources();
+}
+
+async function saveGoogleDataSource() {
+  $("googleDataStatus").textContent = "正在保存 Google 复盘数据源...";
+  const data = await api("/api/google-data-sources", { source: await readGoogleDataSourceForm() });
+  state.googleDataSources = data.sources || [];
+  state.selectedGoogleDataSourceId = data.source?.id || state.selectedGoogleDataSourceId;
+  $("googleServiceAccountFileInput").value = "";
+  $("googleDataStatus").textContent = `已保存数据源：${data.source?.name || "Google 数据源"}。`;
+  renderGoogleDataSources();
+}
+
+async function testGoogleDataSource() {
+  const sourceId = state.selectedGoogleDataSourceId;
+  if (!sourceId) throw new Error("请先保存并选择一个 Google 数据源。");
+  $("googleDataStatus").textContent = "正在测试 GSC / GA4 连接...";
+  const data = await api("/api/google-data-sources/test", { sourceId });
+  $("googleDataStatus").textContent = `连接成功：${(data.checks || []).map((check) => `${check.type} ${check.rows} 行样例`).join("；") || "已完成鉴权"}。`;
+}
+
+async function loadGoogleReviewData() {
+  const sourceId = state.selectedGoogleDataSourceId;
+  if (!sourceId) throw new Error("请先保存并选择一个 Google 数据源。");
+  $("googleDataStatus").textContent = "正在拉取 GSC / GA4 复盘数据...";
+  const data = await api("/api/google-data-sources/monthly-review", {
+    sourceId,
+    startDate: $("googleDataStartInput").value,
+    endDate: $("googleDataEndInput").value,
+    rowLimit: 100,
+  });
+  state.googleReviewData = data;
+  $("googleDataStatus").textContent = `已拉取复盘数据：${data.dateRange?.startDate || ""} 至 ${data.dateRange?.endDate || ""}。`;
+  renderGoogleReviewData();
+}
+
 function renderAll() {
   state.project = readProject();
   renderLocaleStatus();
@@ -2831,6 +3271,7 @@ function renderAll() {
   renderAiStages();
   renderGeneration();
   renderWpSites();
+  renderGoogleDataSources();
   renderTodos();
   applyActivePage(state.activePage);
 }
@@ -3703,13 +4144,15 @@ function bindEvents() {
   document.querySelectorAll("[data-page-target]").forEach((link) => {
     link.addEventListener("click", (event) => {
       event.preventDefault();
-      applyActivePage(link.dataset.pageTarget);
-      history.pushState(null, "", `#page-${link.dataset.pageTarget}`);
+      const page = link.dataset.pageTarget;
+      applyActivePage(page);
+      history.pushState(null, "", routeForPage(page));
       window.scrollTo({ top: 0, behavior: "smooth" });
       saveWorkspaceDraft();
     });
   });
-  window.addEventListener("hashchange", () => activatePageForHash(window.location.hash));
+  window.addEventListener("popstate", activatePageForLocation);
+  window.addEventListener("hashchange", activatePageForLocation);
 
   document.querySelectorAll("[data-project-preset]").forEach((button) => {
     button.addEventListener("click", () => applyProjectPreset(button.dataset.projectPreset));
@@ -3947,6 +4390,23 @@ function bindEvents() {
   $("batchUploadGeneratedBtn").addEventListener("click", () =>
     uploadGeneratedArticlesToContentSite().catch((error) => ($("contentHubStatus").textContent = `批量导入失败：${error.message}`)),
   );
+  $("googleDataSourceSelect").addEventListener("change", () => {
+    state.selectedGoogleDataSourceId = $("googleDataSourceSelect").value;
+    state.googleReviewData = null;
+    renderGoogleDataSources();
+  });
+  $("reloadGoogleDataSourcesBtn").addEventListener("click", () =>
+    loadGoogleDataSources().catch((error) => ($("googleDataStatus").textContent = `读取失败：${error.message}`)),
+  );
+  $("saveGoogleDataSourceBtn").addEventListener("click", () =>
+    saveGoogleDataSource().catch((error) => ($("googleDataStatus").textContent = `保存失败：${error.message}`)),
+  );
+  $("testGoogleDataSourceBtn").addEventListener("click", () =>
+    testGoogleDataSource().catch((error) => ($("googleDataStatus").textContent = `连接失败：${error.message}`)),
+  );
+  $("loadGoogleReviewDataBtn").addEventListener("click", () =>
+    loadGoogleReviewData().catch((error) => ($("googleDataStatus").textContent = `拉取失败：${error.message}`)),
+  );
   $("exportCsvBtn").addEventListener("click", exportKeywordCsv);
   $("exportCalendarBtn").addEventListener("click", exportCalendarCsv);
   $("exportStateBtn").addEventListener("click", () => exportStateJson().catch((error) => setArticleOutput(error.message)));
@@ -3978,7 +4438,7 @@ async function init() {
   bindEvents();
   const restored = restoreWorkspaceDraft();
   renderAll();
-  activatePageForHash(window.location.hash);
+  activatePageForLocation();
 
   try {
     await loadStandard();
@@ -3992,9 +4452,12 @@ async function init() {
     await loadMainSites().catch((error) => {
       $("mainPublishStatus").textContent = `主站 OpenAPI 配置读取失败：${error.message}`;
     });
+    await loadGoogleDataSources().catch((error) => {
+      $("googleDataStatus").textContent = `Google 复盘数据源读取失败：${error.message}`;
+    });
     await loadTodos();
     renderAll();
-    activatePageForHash(window.location.hash);
+    activatePageForLocation();
   } catch (error) {
     setArticleOutput(`本地服务暂时不可用：${error.message}\n\n请在 seo-workbench 目录运行 npm start。`);
   }

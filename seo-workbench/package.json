@@ -9,6 +9,9 @@
     "dev": "node ./src/server/index.mjs",
     "check": "node --check ./app.js && node --check ./src/server/index.mjs && node --check ./server.example.mjs"
   },
+  "dependencies": {
+    "undici": "^6.21.1"
+  },
   "engines": {
     "node": ">=18"
   }
