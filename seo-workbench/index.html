@@ -500,6 +500,33 @@
             </label>
           </div>
 
+          <article class="bulk-publish-panel">
+            <div class="bulk-publish-head">
+              <div>
+                <p class="eyebrow">Batch Publishing</p>
+                <h4>批量发布计划</h4>
+                <p>只面向 WordPress 和自建博客站点。每个站点独立读取文章库存、独立生成机会池、独立 AI 复核，避免多个站点关键词揉在一起。</p>
+              </div>
+              <div class="button-row">
+                <button class="soft-btn" id="saveCurrentBulkPlanBtn">保存当前站点勾选</button>
+                <button class="primary-btn" id="runBulkPublishBtn">一键生成并发布</button>
+              </div>
+            </div>
+            <div class="bulk-publish-options">
+              <label class="checkbox-field content-rule-check">
+                <input id="bulkPublishAiReviewInput" type="checkbox" checked />
+                生成前使用 AI + 本地规则复核
+              </label>
+              <label class="checkbox-field content-rule-check">
+                <input id="bulkPublishAutoUploadInput" type="checkbox" checked />
+                生成完成后直接发布到对应站点
+              </label>
+            </div>
+            <div class="bulk-publish-sites" id="bulkPublishSites"></div>
+            <p class="inline-status" id="bulkPublishStatus">先给需要起量的文章站点设置发布数量，然后点“载入关键词”查看并勾选该站点机会。</p>
+            <pre class="markdown-box compact-box scroll-box bulk-publish-log" id="bulkPublishLog">还没有批量发布任务。</pre>
+          </article>
+
           <div class="standard-summary content-hub-summary" id="contentHubSummary"></div>
           <p class="inline-status" id="contentHubStatus">先选择一个具体站点，再点击“读取/刷新文章”，系统会读取文章并生成内容机会池。</p>
 

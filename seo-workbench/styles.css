@@ -1134,6 +1134,105 @@ input[type="checkbox"] {
   margin-top: 12px;
 }
 
+.bulk-publish-panel {
+  margin: 16px 0;
+  padding: 18px;
+  border: 1px solid rgba(39, 60, 49, 0.14);
+  border-radius: 24px;
+  background:
+    linear-gradient(135deg, rgba(245, 230, 195, 0.68), rgba(238, 246, 224, 0.52)),
+    rgba(255, 251, 241, 0.9);
+  box-shadow: 0 18px 40px rgba(78, 58, 38, 0.08);
+}
+
+.bulk-publish-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.bulk-publish-head h4 {
+  margin: 3px 0 8px;
+  font-family: "Noto Serif SC", "Source Han Serif SC", serif;
+  font-size: 1.55rem;
+  color: var(--ink);
+}
+
+.bulk-publish-head p:not(.eyebrow) {
+  max-width: 760px;
+  margin: 0;
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+
+.bulk-publish-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.bulk-publish-sites {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.bulk-site-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid rgba(39, 60, 49, 0.14);
+  border-radius: 20px;
+  background: rgba(255, 251, 241, 0.82);
+}
+
+.bulk-site-card.active {
+  border-color: rgba(125, 95, 60, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(125, 95, 60, 0.18);
+}
+
+.bulk-site-title {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.bulk-site-title strong {
+  display: block;
+  color: var(--ink);
+}
+
+.bulk-site-title span,
+.bulk-site-meta {
+  color: var(--ink-soft);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.bulk-site-controls {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 10px;
+  align-items: end;
+}
+
+.bulk-site-controls input[type="number"] {
+  width: 100%;
+}
+
+.bulk-site-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bulk-publish-log {
+  margin-top: 12px;
+}
+
 .content-opportunity-toolbar {
   display: flex;
   align-items: center;

@@ -102,6 +102,9 @@ const state = {
   article: "",
   articleParts: null,
   articleSave: null,
+  briefInfo: null,
+  generationLog: [],
+  generationRunId: "",
   aiStages: loadAiStages(),
   wpSites: [],
   selectedWpSiteId: "",
@@ -140,6 +143,14 @@ const state = {
     opportunityPage: 1,
     opportunityPageSize: 25,
     lastSummary: null,
+  },
+  bulkPublish: {
+    plans: {},
+    activeSiteKey: "",
+    autoAiReview: true,
+    autoPublish: true,
+    log: "",
+    lastRunAt: "",
   },
   globalBrain: {
     selectedMarket: "__project__",
@@ -539,13 +550,40 @@ function serpMatchesItem(item = selectedItem(), locale = articleGenerationProjec
 async function ensureSerpForArticle(item = selectedItem()) {
   const project = articleGenerationProject();
   const locale = project.locale || {};
-  if (!item?.keyword || !state.serpApiConfig?.enabled) return null;
-  if (serpMatchesItem(item, locale)) return state.serpData;
+  if (!item?.keyword) {
+    appendGenerationLog("SERP 跳过：没有当前关键词", {}, "warn");
+    return null;
+  }
+  if (!state.serpApiConfig?.enabled) {
+    appendGenerationLog("SERP 跳过：SerpApi 未配置或未启用", {
+      keyword: item.keyword,
+      gl: locale.googleGl || "",
+      hl: locale.googleHl || "",
+    }, "warn");
+    return null;
+  }
+  if (serpMatchesItem(item, locale)) {
+    appendGenerationLog("SERP 使用缓存", {
+      query: state.serpData?.query || "",
+      gl: state.serpData?.gl || "",
+      hl: state.serpData?.hl || "",
+      organicResults: state.serpData?.organicResults?.length || 0,
+      serpApiResponse: state.serpData || null,
+    });
+    return state.serpData;
+  }
 
   const statusTarget = $("serpApiStatus") || $("articleSaveStatus") || $("contentHubStatus");
   if (statusTarget) {
     statusTarget.textContent = `正在为文章生成拉取 SERP：${item.keyword}（gl=${locale.googleGl || "-"} / hl=${locale.googleHl || "-"}）`;
   }
+  appendGenerationLog("SERP API 请求开始", {
+    endpoint: "/api/serpapi/search",
+    query: item.keyword,
+    gl: locale.googleGl || "",
+    hl: locale.googleHl || "",
+    num: 10,
+  });
   const data = await api("/api/serpapi/search", {
     query: item.keyword,
     locale,
@@ -554,6 +592,15 @@ async function ensureSerpForArticle(item = selectedItem()) {
   state.serpData = data;
   renderSerpApiConfig();
   renderGlobalBrain();
+  appendGenerationLog("SERP API 请求完成", {
+    query: data.query || item.keyword,
+    gl: data.gl || "",
+    hl: data.hl || "",
+    organicResults: data.organicResults?.length || 0,
+    relatedQuestions: data.relatedQuestions?.length || 0,
+    relatedSearches: data.relatedSearches?.length || 0,
+    serpApiResponse: data,
+  });
   return data;
 }
 
@@ -879,11 +926,15 @@ function saveWorkspaceDraft(message = "") {
       tablePage: state.tablePage,
       pageSize: state.pageSize,
       brief: state.brief,
+      briefInfo: state.briefInfo,
       prompt: state.prompt,
       article: state.article,
       articleSave: state.articleSave,
+      generationLog: state.generationLog,
+      generationRunId: state.generationRunId,
       activePage: state.activePage,
       contentHub: serializableContentHubDraft(),
+      bulkPublish: state.bulkPublish,
       globalBrain: state.globalBrain,
       selectedGoogleDataSourceId: state.selectedGoogleDataSourceId,
       googleReviewData: state.googleReviewData,
@@ -923,10 +974,13 @@ function restoreWorkspaceDraft() {
     state.tablePage = Number(draft.tablePage) || 1;
     state.pageSize = Number(draft.pageSize) || 50;
     state.brief = draft.brief || "";
+    state.briefInfo = draft.briefInfo || null;
     state.prompt = draft.prompt || "";
     state.article = draft.article || "";
     state.articleParts = splitArticleForWp(state.article);
     state.articleSave = draft.articleSave || null;
+    state.generationLog = Array.isArray(draft.generationLog) ? draft.generationLog : [];
+    state.generationRunId = draft.generationRunId || "";
     state.activePage = draft.activePage || state.activePage;
     state.globalBrain = {
       ...state.globalBrain,
@@ -944,6 +998,13 @@ function restoreWorkspaceDraft() {
         opportunities: Array.isArray(draft.contentHub.opportunities) ? draft.contentHub.opportunities : [],
         selectedIds: Array.isArray(draft.contentHub.selectedIds) ? draft.contentHub.selectedIds : [],
         generatedArticles: Array.isArray(draft.contentHub.generatedArticles) ? draft.contentHub.generatedArticles : [],
+      };
+    }
+    if (draft.bulkPublish && typeof draft.bulkPublish === "object") {
+      state.bulkPublish = {
+        ...state.bulkPublish,
+        ...draft.bulkPublish,
+        plans: draft.bulkPublish.plans && typeof draft.bulkPublish.plans === "object" ? draft.bulkPublish.plans : {},
       };
     }
     const savedTime = draft.savedAt ? new Date(draft.savedAt).toLocaleString() : "上次";
@@ -1680,6 +1741,14 @@ function articlePageTypeForOpportunity(item = {}, source = contentSourceType()) 
 function buildContentOpportunity(item = {}, source = contentSourceType(), posts = postsForContentSite(), site = selectedContentSite()) {
   const coverage = keywordCoverage(item.keyword, posts);
   if (!isArticleKeywordCandidate(item, source)) return null;
+  const siteProfileForLocale = site ? inferSiteProfile(site) : {};
+  if (
+    item.locale?.configured &&
+    siteProfileForLocale.locale?.configured &&
+    !localeMatchesScope(item.locale, siteProfileForLocale.locale, false)
+  ) {
+    return null;
+  }
   const roleMatch = keywordRoleMatchesSite(item, site);
   if (!roleMatch.compatible) return null;
 
@@ -3255,6 +3324,45 @@ function renderArticleParts(content = state.article) {
   $("articleOutput").textContent = parts.full || "这里会显示完整 Markdown。";
 }
 
+function formatGenerationLog(entries = state.generationLog || []) {
+  if (!entries.length) return "还没有生成过程日志。点击“生成 Prompt”或“生成文章”后会写入本地 .log 文件。";
+  return entries
+    .map((entry, index) => {
+      const time = entry.time ? new Date(entry.time).toLocaleTimeString() : "";
+      const details = entry.details && Object.keys(entry.details).length
+        ? `\n${JSON.stringify(entry.details, null, 2)}`
+        : "";
+      return `${index + 1}. [${time}] ${entry.level || "info"} · ${entry.step}${details}`;
+    })
+    .join("\n\n");
+}
+
+function renderGenerationLog() {
+  // Generation logs are written to the local .log file with the article, not rendered in the UI.
+}
+
+function resetGenerationLog(label = "生成流程", item = selectedItem()) {
+  state.generationRunId = requestId("generation");
+  state.generationLog = [];
+  appendGenerationLog(`${label}开始`, {
+    runId: state.generationRunId,
+    keyword: item?.keyword || "",
+    selectedMarket: readProject().market || "",
+  });
+}
+
+function appendGenerationLog(step, details = {}, level = "info") {
+  const entry = {
+    time: new Date().toISOString(),
+    level,
+    step,
+    details,
+  };
+  state.generationLog = [...(state.generationLog || []), entry].slice(-120);
+  renderGenerationLog();
+  return entry;
+}
+
 function setArticleOutput(message) {
   renderArticleParts(String(message || ""));
   if ($("articleSaveStatus") && !state.articleSave) {
@@ -3412,12 +3520,17 @@ function renderTable() {
 
 function renderBrief() {
   const item = selectedItem();
+  const briefInfo = state.briefInfo || {};
+  const briefSourceLabel = briefInfo.aiEnhanced
+    ? `Brief: AI增强 ${briefInfo.provider || ""} ${briefInfo.model || ""}${briefInfo.cached ? " · 缓存" : ""}`
+    : `Brief: 本地规则${briefInfo.reason ? ` · ${briefInfo.reason}` : ""}`;
   $("briefTitle").textContent = item ? item.keyword : "请选择一个关键词";
   $("briefMeta").innerHTML = item
     ? `
       <span class="badge ${item.assignedSite?.startsWith("主站") ? "main" : ""}">${escapeHtml(item.assignedSite)}</span>
       <span class="badge">${escapeHtml(item.pageType)}</span>
       <span class="badge">${escapeHtml(item.priority)} · ${escapeHtml(item.scores?.total || 0)}</span>
+      <span class="badge ${briefInfo.aiEnhanced ? "ai" : ""}">${escapeHtml(briefSourceLabel.trim())}</span>
     `
     : "";
   $("briefOutput").textContent = state.brief || "选择关键词后，这里会生成可交给 AI 或写手的 Brief。";
@@ -3500,9 +3613,10 @@ function renderAiStages() {
 function renderGeneration() {
   $("promptOutput").value = state.prompt || "";
   renderArticleParts(state.article || "这里会显示 AI 复核结果或文章 Markdown。Local/Mock 阶段不会调用外部 API；外部阶段会通过服务端代理转发。");
+  renderGenerationLog();
   if ($("articleSaveStatus")) {
     $("articleSaveStatus").textContent = state.articleSave?.relativePath
-      ? `已自动保存：${state.articleSave.relativePath}`
+      ? `已自动保存：${state.articleSave.relativePath}${state.articleSave.logRelativePath ? `；日志：${state.articleSave.logRelativePath}` : ""}`
       : "生成后的文章会自动保存到 generated-articles/站点名/ 目录。";
   }
   updateActionStates();
@@ -3552,6 +3666,246 @@ function createContentGenerationBatch(site = selectedContentSite()) {
   };
 }
 
+function bulkPublishSiteOptions() {
+  return allContentSiteOptions().filter((site) => ["blog", "wp"].includes(site.type) && site.compatible);
+}
+
+function bulkPublishPlan(siteKey) {
+  return state.bulkPublish.plans?.[siteKey] || null;
+}
+
+function updateBulkPublishPlan(siteKey, updates = {}) {
+  if (!siteKey) return null;
+  const previous = bulkPublishPlan(siteKey) || { siteKey, enabled: false, count: 1, selectedIds: [] };
+  const next = {
+    ...previous,
+    ...updates,
+    siteKey,
+    count: Math.max(1, Number(updates.count ?? previous.count ?? 1)),
+    selectedIds: Array.isArray(updates.selectedIds) ? updates.selectedIds : previous.selectedIds || [],
+    updatedAt: new Date().toISOString(),
+  };
+  state.bulkPublish.plans = {
+    ...(state.bulkPublish.plans || {}),
+    [siteKey]: next,
+  };
+  return next;
+}
+
+function plannedBulkPublishSites() {
+  const options = bulkPublishSiteOptions();
+  return options
+    .map((site) => ({ site, plan: bulkPublishPlan(site.key) }))
+    .filter(({ plan }) => plan?.enabled && Number(plan.count || 0) > 0);
+}
+
+function appendBulkPublishLog(line) {
+  const next = [state.bulkPublish.log || "", line].filter(Boolean).join("\n");
+  state.bulkPublish.log = next.slice(-12000);
+  if ($("bulkPublishLog")) $("bulkPublishLog").textContent = state.bulkPublish.log || "还没有批量发布任务。";
+}
+
+function renderBulkPublish() {
+  const container = $("bulkPublishSites");
+  if (!container) return;
+  const sites = bulkPublishSiteOptions();
+  if ($("bulkPublishAiReviewInput")) $("bulkPublishAiReviewInput").checked = Boolean(state.bulkPublish.autoAiReview);
+  if ($("bulkPublishAutoUploadInput")) $("bulkPublishAutoUploadInput").checked = Boolean(state.bulkPublish.autoPublish);
+  if ($("bulkPublishLog")) $("bulkPublishLog").textContent = state.bulkPublish.log || "还没有批量发布任务。";
+
+  if (!sites.length) {
+    container.innerHTML = `<div class="bulk-site-card"><strong>还没有可发布的文章站点</strong><span class="bulk-site-meta">请先配置 WordPress 或自建博客后台站点，并确保市场/语种与当前项目匹配。</span></div>`;
+    if ($("bulkPublishStatus")) $("bulkPublishStatus").textContent = "暂无可用的文章站点。";
+    return;
+  }
+
+  container.innerHTML = sites
+    .map((site) => {
+      const profile = site.profile || inferSiteProfile(site);
+      const plan = bulkPublishPlan(site.key) || {};
+      const selectedCount = Array.isArray(plan.selectedIds) ? plan.selectedIds.length : 0;
+      const isActive = state.contentHub.selectedSiteKey === site.key;
+      const enabled = Boolean(plan.enabled);
+      return `
+        <article class="bulk-site-card ${isActive ? "active" : ""}">
+          <div class="bulk-site-title">
+            <div>
+              <strong>${escapeHtml(site.name)}</strong>
+              <span>${escapeHtml(site.type === "wp" ? "WordPress" : "自建博客后台")}</span>
+            </div>
+            <label class="checkbox-field">
+              <input type="checkbox" data-bulk-site-enabled="${escapeHtml(site.key)}" ${enabled ? "checked" : ""} />
+              加入计划
+            </label>
+          </div>
+          <div class="bulk-site-meta">${escapeHtml(profile.contentRole || "未配置板块")} · ${escapeHtml(profile.targetMarket || "未配置市场")} · ${escapeHtml(profile.targetLanguage || "未配置语种")}</div>
+          <div class="bulk-site-controls">
+            <label>
+              数量
+              <input type="number" min="1" max="50" value="${escapeHtml(plan.count || 1)}" data-bulk-site-count="${escapeHtml(site.key)}" />
+            </label>
+            <div class="bulk-site-meta">已选 ${selectedCount} 个关键词${plan.aiReviewedAt ? " · 已 AI 复核" : ""}</div>
+          </div>
+          <div class="bulk-site-actions">
+            <button class="soft-btn" data-bulk-load-site="${escapeHtml(site.key)}">载入关键词/AI复核</button>
+            <button class="ghost-btn" data-bulk-save-site="${escapeHtml(site.key)}">保存当前勾选</button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+
+  container.querySelectorAll("[data-bulk-site-enabled]").forEach((input) => {
+    input.addEventListener("change", () => {
+      updateBulkPublishPlan(input.dataset.bulkSiteEnabled, { enabled: input.checked });
+      renderBulkPublish();
+      updateActionStates();
+      saveWorkspaceDraft();
+    });
+  });
+  container.querySelectorAll("[data-bulk-site-count]").forEach((input) => {
+    input.addEventListener("input", () => {
+      updateBulkPublishPlan(input.dataset.bulkSiteCount, { count: Number(input.value || 1), enabled: true });
+      updateActionStates();
+      saveWorkspaceDraft();
+    });
+  });
+  container.querySelectorAll("[data-bulk-load-site]").forEach((button) => {
+    button.addEventListener("click", () =>
+      withButtonBusy("runBulkPublishBtn", () =>
+        loadBulkPublishSite(button.dataset.bulkLoadSite).catch((error) => {
+          $("bulkPublishStatus").textContent = `载入站点失败：${error.message}`;
+        }),
+      ),
+    );
+  });
+  container.querySelectorAll("[data-bulk-save-site]").forEach((button) => {
+    button.addEventListener("click", () => saveCurrentBulkPublishPlan(button.dataset.bulkSaveSite));
+  });
+
+  const plannedCount = plannedBulkPublishSites().length;
+  if ($("bulkPublishStatus")) {
+    $("bulkPublishStatus").textContent = plannedCount
+      ? `已加入 ${plannedCount} 个站点。每个站点会独立生成机会池和发布批次。`
+      : "先给需要起量的文章站点设置发布数量，然后点“载入关键词”查看并勾选该站点机会。";
+  }
+}
+
+async function loadBulkPublishSite(siteKey, { force = false } = {}) {
+  const site = bulkPublishSiteOptions().find((item) => item.key === siteKey);
+  if (!site) throw new Error("没有找到可用于批量发布的文章站点。");
+  state.bulkPublish.activeSiteKey = site.key;
+  updateBulkPublishPlan(site.key, { enabled: true });
+
+  if (state.contentHub.selectedSiteKey !== site.key) {
+    state.contentHub.selectedSiteKey = site.key;
+    state.contentHub.source = site.type;
+    state.contentHub.posts = [];
+    state.contentHub.opportunities = [];
+    state.contentHub.selectedIds = [];
+    state.contentHub.activeOpportunity = null;
+    state.contentHub.opportunityPage = 1;
+    state.contentHub.lastSummary = null;
+  }
+
+  renderContentHub();
+  $("bulkPublishStatus").textContent = `正在载入 ${site.name} 的文章库存和关键词机会...`;
+  await loadContentHubSitePosts({ autoPlan: true, force });
+  if (state.bulkPublish.autoAiReview) await aiReviewContentOpportunities();
+
+  const plan = bulkPublishPlan(site.key);
+  const availableIds = new Set((state.contentHub.opportunities || []).map((item) => item.id));
+  const restoredIds = (plan?.selectedIds || []).filter((id) => availableIds.has(id));
+  if (restoredIds.length) {
+    state.contentHub.selectedIds = restoredIds;
+  }
+  updateBulkPublishPlan(site.key, {
+    selectedIds: state.contentHub.selectedIds,
+    aiReviewedAt: state.bulkPublish.autoAiReview ? new Date().toISOString() : plan?.aiReviewedAt || "",
+  });
+  renderContentHub();
+  renderBulkPublish();
+  $("bulkPublishStatus").textContent = `${site.name} 的关键词机会已载入。你可以在下方机会池勾选，也可以直接按数量自动发布。`;
+  saveWorkspaceDraft(`${site.name} 的批量发布机会池已准备好。`);
+}
+
+function saveCurrentBulkPublishPlan(siteKey = state.contentHub.selectedSiteKey) {
+  const site = bulkPublishSiteOptions().find((item) => item.key === siteKey);
+  if (!site || state.contentHub.selectedSiteKey !== site.key) {
+    $("bulkPublishStatus").textContent = "请先点某个站点的“载入关键词/AI复核”，再保存它的勾选。";
+    return;
+  }
+  const selectedIds = (state.contentHub.selectedIds || []).filter((id) =>
+    (state.contentHub.opportunities || []).some((item) => item.id === id),
+  );
+  const count = Math.max(1, Number(bulkPublishPlan(site.key)?.count || $("batchGenerateCountInput")?.value || selectedIds.length || 1));
+  updateBulkPublishPlan(site.key, { enabled: true, count, selectedIds });
+  renderBulkPublish();
+  $("bulkPublishStatus").textContent = `已保存 ${site.name} 的发布计划：数量 ${count}，手动勾选 ${selectedIds.length} 个关键词。`;
+  updateActionStates();
+  saveWorkspaceDraft(`已保存 ${site.name} 的批量发布计划。`);
+}
+
+function selectBulkPlanOpportunities(site, plan) {
+  const opportunities = state.contentHub.opportunities || [];
+  const plannedIds = new Set(plan.selectedIds || []);
+  let selected = opportunities.filter((item) => plannedIds.has(item.id));
+  if (!selected.length) {
+    selected = opportunities
+      .filter((item) => item.action === "新写文章" && item.coverage === "未覆盖")
+      .slice(0, Number(plan.count || 1));
+  }
+  selected = selected.slice(0, Number(plan.count || selected.length || 1));
+  state.contentHub.selectedIds = selected.map((item) => item.id);
+  updateBulkPublishPlan(site.key, { selectedIds: state.contentHub.selectedIds });
+  return selected;
+}
+
+async function runBulkPublish() {
+  const planned = plannedBulkPublishSites();
+  if (!planned.length) {
+    $("bulkPublishStatus").textContent = "请先把至少一个 WordPress 或自建博客站点加入批量发布计划。";
+    return;
+  }
+
+  state.bulkPublish.autoAiReview = Boolean($("bulkPublishAiReviewInput")?.checked);
+  state.bulkPublish.autoPublish = Boolean($("bulkPublishAutoUploadInput")?.checked);
+  state.bulkPublish.lastRunAt = new Date().toISOString();
+  state.bulkPublish.log = "";
+  appendBulkPublishLog(`[开始] 批量发布计划：${planned.length} 个站点。AI复核：${state.bulkPublish.autoAiReview ? "开启" : "关闭"}；自动发布：${state.bulkPublish.autoPublish ? "开启" : "关闭"}。`);
+
+  for (const { site, plan } of planned) {
+    try {
+      appendBulkPublishLog(`\n[站点] ${site.name}：计划 ${plan.count} 篇。`);
+      $("bulkPublishStatus").textContent = `正在处理 ${site.name}...`;
+      await loadBulkPublishSite(site.key, { force: false });
+      const selected = selectBulkPlanOpportunities(site, bulkPublishPlan(site.key) || plan);
+      if (!selected.length) {
+        appendBulkPublishLog(`[跳过] ${site.name}：没有找到可写的新文章机会。`);
+        continue;
+      }
+
+      renderContentHub();
+      appendBulkPublishLog(`[生成] ${site.name}：${selected.map((item) => item.keyword).join("；")}`);
+      await batchGenerateSelectedOpportunities();
+
+      if (state.bulkPublish.autoPublish) {
+        appendBulkPublishLog(`[发布] ${site.name}：上传本次生成批次。`);
+        await uploadGeneratedArticlesToContentSite();
+      } else {
+        appendBulkPublishLog(`[保留] ${site.name}：已生成但未发布，可在内容中枢手动导入。`);
+      }
+      appendBulkPublishLog(`[完成] ${site.name}`);
+    } catch (error) {
+      appendBulkPublishLog(`[失败] ${site.name}：${error.message}`);
+    }
+  }
+
+  renderBulkPublish();
+  $("bulkPublishStatus").textContent = "批量发布流程已结束。请查看日志确认每个站点的生成/发布结果。";
+  saveWorkspaceDraft("批量发布流程已结束。");
+}
+
 function updateActionStates() {
   const selected = selectedItem();
   const hasKeywords = state.keywords.length > 0;
@@ -3563,6 +3917,7 @@ function updateActionStates() {
   const opportunities = state.contentHub.opportunities || [];
   const selectedOpportunityCount = (state.contentHub.selectedIds || []).length;
   const generatedForSite = uploadableArticlesForLatestBatch();
+  const plannedBulkSites = plannedBulkPublishSites().length;
   const hasProductEndpoint = Boolean($("productApiEndpointInput")?.value.trim() || state.productAssets?.api?.endpoint);
   const hasProductAssets = Boolean(state.productAssets?.products?.length);
 
@@ -3589,6 +3944,8 @@ function updateActionStates() {
   setActionEnabled("clearOpportunitySelectionBtn", selectedOpportunityCount > 0, "当前没有勾选机会。");
   setActionEnabled("batchGenerateSelectedBtn", selectedOpportunityCount > 0, "先在内容机会池勾选要生成的关键词。");
   setActionEnabled("batchUploadGeneratedBtn", Boolean(contentSite && generatedForSite.length), "先为当前站点批量生成文章。");
+  setActionEnabled("saveCurrentBulkPlanBtn", Boolean(contentSite && ["blog", "wp"].includes(contentSite.type)), "先载入一个 WordPress 或自建博客站点。");
+  setActionEnabled("runBulkPublishBtn", Boolean(plannedBulkSites && hasKeywords), "先加入站点并导入关键词。");
 
   setActionEnabled("listWpPostsBtn", Boolean(state.selectedWpSiteId), "先保存或选择一个 WordPress 站点。");
   setActionEnabled("aiDiagnoseWpPostsBtn", Boolean(state.selectedWpSiteId), "先保存或选择一个 WordPress 站点。");
@@ -4586,6 +4943,7 @@ function renderAll() {
   renderFilters();
   renderTable();
   renderContentHub();
+  renderBulkPublish();
   renderBrief();
   renderAiStages();
   renderGeneration();
@@ -4765,10 +5123,32 @@ async function refreshSelected() {
   }
 
   const project = readProject();
+  resetGenerationLog("生成 Prompt", item);
+  appendGenerationLog("Brief 请求开始", {
+    endpoint: "/api/workflow/brief",
+    briefStageProvider: state.aiStages.briefGeneration?.provider || "",
+    briefStageModel: state.aiStages.briefGeneration?.model || "",
+    usesExternalAi: !["local", ""].includes(String(state.aiStages.briefGeneration?.provider || "")) &&
+      state.aiStages.briefGeneration?.apiFormat !== "local",
+  });
   const briefData = await api("/api/workflow/brief", {
     keyword: item,
     project,
     aiStage: state.aiStages.briefGeneration,
+  });
+  appendGenerationLog("Brief 请求完成", {
+    source: briefData.briefSource || "local",
+    aiEnhanced: Boolean(briefData.aiEnhanced),
+    provider: briefData.aiMeta?.provider || "",
+    model: briefData.aiMeta?.model || "",
+    reason: briefData.aiMeta?.reason || "",
+    localBrief: briefData.localBrief || "",
+    finalBrief: briefData.brief || "",
+    rawBriefResponse: briefData,
+  });
+  appendGenerationLog("Prompt 请求开始", {
+    endpoint: "/api/workflow/prompt",
+    note: "当前 Prompt 模板由本地 workflow 生成；如果 Brief 已 AI 增强，Prompt 会使用增强后的 Brief。",
   });
   const promptData = await api("/api/workflow/prompt", {
     keyword: item,
@@ -4776,8 +5156,22 @@ async function refreshSelected() {
     briefOverride: briefData.brief || "",
     aiStage: state.aiStages.briefGeneration,
   });
+  appendGenerationLog("Prompt 请求完成", {
+    promptLength: String(promptData.prompt || "").length,
+    prompt: promptData.prompt || "",
+    rawPromptResponse: promptData,
+    note: "生成 Prompt 这一步本身不拉 SERP；SERP 会在生成文章前自动补充。",
+  });
 
   state.brief = briefData.brief || "";
+  state.briefInfo = {
+    source: briefData.briefSource || "local",
+    aiEnhanced: Boolean(briefData.aiEnhanced),
+    provider: briefData.aiMeta?.provider || "",
+    model: briefData.aiMeta?.model || "",
+    reason: briefData.aiMeta?.reason || "",
+    cached: Boolean(briefData.aiMeta?.cached),
+  };
   state.prompt = promptData.prompt || "";
   renderAll();
   saveWorkspaceDraft();
@@ -4899,6 +5293,55 @@ function articleGenerationProject() {
     targetSiteName: opportunity.siteName || opportunity.sourceLabel || "",
     targetSiteRole: opportunity.siteRole || "",
   };
+}
+
+function localeConflictForArticle(item = selectedItem()) {
+  const project = articleGenerationProject();
+  const targetLocale = project.locale || {};
+  const keywordLocale = item?.locale || {};
+  if (!item || !keywordLocale.configured || !targetLocale.configured) return null;
+
+  const keywordGl = String(keywordLocale.googleGl || "").toLowerCase();
+  const targetGl = String(targetLocale.googleGl || "").toLowerCase();
+  const keywordLang = String(keywordLocale.languageCode || keywordLocale.language || "").toLowerCase();
+  const targetLang = String(targetLocale.languageCode || targetLocale.language || "").toLowerCase();
+  const marketConflict = keywordGl && targetGl && keywordGl !== targetGl;
+  const languageConflict = keywordLang && targetLang && keywordLang !== "multi" && keywordLang !== targetLang;
+
+  if (!marketConflict && !languageConflict) return null;
+  return {
+    keywordMarket: keywordLocale.rawMarket || `${keywordLocale.market || ""} / ${keywordLocale.language || ""}`.trim(),
+    targetMarket: targetLocale.rawMarket || `${targetLocale.market || ""} / ${targetLocale.language || ""}`.trim(),
+    keywordGl,
+    targetGl,
+    keywordLanguage: keywordLocale.language || keywordLocale.languageCode || "",
+    targetLanguage: targetLocale.language || targetLocale.languageCode || "",
+  };
+}
+
+function assertArticleGenerationReady(item = selectedItem()) {
+  const conflict = localeConflictForArticle(item);
+  if (!conflict) return;
+  const message = [
+    "已拦截生成：关键词市场/语种与目标站点不一致。",
+    `关键词市场：${conflict.keywordMarket || "unknown"}（gl=${conflict.keywordGl || "-"} / language=${conflict.keywordLanguage || "-"}）`,
+    `目标生成市场：${conflict.targetMarket || "unknown"}（gl=${conflict.targetGl || "-"} / language=${conflict.targetLanguage || "-"}）`,
+    "请切换到匹配市场的站点，或重新导入/筛选同市场关键词后再生成。",
+  ].join("\n");
+  appendGenerationLog("生成前安全闸门拦截", conflict, "error");
+  throw new Error(message);
+}
+
+function extractArticleContentFromAiResponse(data = {}) {
+  const content = String(data.content || data.text || "").trim();
+  if (!content) {
+    const reason = data.error || data.status || "AI 没有返回可发布正文。";
+    throw new Error(`文章生成失败：${reason}`);
+  }
+  if (/^\s*[{[]/.test(content) && /"choices"\s*:|"object"\s*:\s*"chat\.completion"/.test(content.slice(0, 600))) {
+    throw new Error("文章生成失败：模型返回了原始 JSON，而不是 Markdown 正文。请检查模型/中转站是否只返回 reasoning_content。");
+  }
+  return content;
 }
 
 function articleSaveContextFor(item = {}) {
@@ -5032,19 +5475,49 @@ function opportunityPromptContext(item = selectedItem()) {
 }
 
 async function ensureArticlePrompt(item) {
+  appendGenerationLog("文章 Prompt 准备开始", {
+    keyword: item?.keyword || "",
+    hasExistingPrompt: Boolean(($("promptOutput").value || state.prompt || "").trim()),
+  });
   await ensureSerpForArticle(item);
   const currentPrompt = $("promptOutput").value || state.prompt || "";
   if (promptHasArticleFormat(currentPrompt) && promptHasLocaleGuardrail(currentPrompt)) {
+    appendGenerationLog("复用当前 Prompt", {
+      reason: "当前 Prompt 已包含文章格式规范和 Locale Guardrail。",
+    });
     state.prompt = stripRuntimePromptContext(currentPrompt);
     const context = opportunityPromptContext(item);
-    if (context) state.prompt = `${state.prompt}\n\n${context}`.trim();
+    if (context) {
+      state.prompt = `${state.prompt}\n\n${context}`.trim();
+      appendGenerationLog("追加内容中枢上下文", {
+        hasActiveOpportunity: true,
+        sourceSite: state.contentHub.activeOpportunity?.sourceLabel || "",
+        internalLinks: state.contentHub.activeOpportunity?.internalLinks?.length || 0,
+        contentHubPromptContext: context,
+      });
+    }
     const serpContext = serpPromptContext(item);
-    if (serpContext) state.prompt = `${state.prompt}\n\n${serpContext}`.trim();
+    if (serpContext) {
+      state.prompt = `${state.prompt}\n\n${serpContext}`.trim();
+      appendGenerationLog("追加 SERP 上下文到 Prompt", {
+        hasRealSerp: serpMatchesItem(item, articleGenerationProject().locale || {}),
+        organicResults: state.serpData?.organicResults?.length || 0,
+        serpPromptContext: serpContext,
+      });
+    }
     $("promptOutput").value = state.prompt;
+    appendGenerationLog("文章 Prompt 准备完成", {
+      finalPromptLength: state.prompt.length,
+      finalPrompt: state.prompt,
+    });
     return;
   }
 
   try {
+    appendGenerationLog("重新请求本地 Prompt 模板", {
+      endpoint: "/api/workflow/prompt",
+      reason: "当前 Prompt 缺少文章格式规范或 Locale Guardrail。",
+    });
     const promptData = await api("/api/workflow/prompt", {
       keyword: item,
       project: articleGenerationProject(),
@@ -5053,22 +5526,50 @@ async function ensureArticlePrompt(item) {
     });
     state.brief = promptData.brief || state.brief;
     state.prompt = promptData.prompt || currentPrompt;
+    appendGenerationLog("本地 Prompt 模板请求完成", {
+      promptLength: String(state.prompt || "").length,
+      prompt: state.prompt || "",
+      rawPromptResponse: promptData,
+    });
   } catch {
     state.prompt = currentPrompt;
+    appendGenerationLog("本地 Prompt 模板请求失败，沿用当前 Prompt", {}, "warn");
   }
 
   state.prompt = stripRuntimePromptContext(state.prompt);
 
   if (!promptHasArticleFormat(state.prompt) || !promptHasLocaleGuardrail(state.prompt)) {
     state.prompt = `${state.prompt || ""}\n${requiredArticleFormatPrompt()}`.trim();
+    appendGenerationLog("补充强制格式与 Locale 规范", {
+      reason: "Prompt 缺少 WordPress 导入格式或 Locale Guardrail。",
+    });
   }
 
   const context = opportunityPromptContext(item);
-  if (context) state.prompt = `${state.prompt}\n\n${context}`.trim();
+  if (context) {
+    state.prompt = `${state.prompt}\n\n${context}`.trim();
+    appendGenerationLog("追加内容中枢上下文", {
+      hasActiveOpportunity: true,
+      sourceSite: state.contentHub.activeOpportunity?.sourceLabel || "",
+      internalLinks: state.contentHub.activeOpportunity?.internalLinks?.length || 0,
+      contentHubPromptContext: context,
+    });
+  }
   const serpContext = serpPromptContext(item);
-  if (serpContext) state.prompt = `${state.prompt}\n\n${serpContext}`.trim();
+  if (serpContext) {
+    state.prompt = `${state.prompt}\n\n${serpContext}`.trim();
+    appendGenerationLog("追加 SERP 上下文到 Prompt", {
+      hasRealSerp: serpMatchesItem(item, articleGenerationProject().locale || {}),
+      organicResults: state.serpData?.organicResults?.length || 0,
+      serpPromptContext: serpContext,
+    });
+  }
 
   $("promptOutput").value = state.prompt;
+  appendGenerationLog("文章 Prompt 准备完成", {
+    finalPromptLength: state.prompt.length,
+    finalPrompt: state.prompt,
+  });
 }
 
 async function saveGeneratedArticleToServer(item, options = {}) {
@@ -5076,6 +5577,12 @@ async function saveGeneratedArticleToServer(item, options = {}) {
 
   const saveContext = articleSaveContextFor(item);
   const parts = state.articleParts || splitArticleForWp(state.article);
+  appendGenerationLog("保存 Markdown 和日志文件开始", {
+    endpoint: "/api/articles/save",
+    siteName: articleSiteNameFor(saveContext),
+    slug: parts.slug || slugify(saveContext.keyword || "seo-article"),
+    batchId: options.batchId || "",
+  });
   const data = await api("/api/articles/save", {
     content: state.article,
     slug: parts.slug || slugify(saveContext.keyword || "seo-article"),
@@ -5083,11 +5590,17 @@ async function saveGeneratedArticleToServer(item, options = {}) {
     keyword: saveContext,
     project: articleGenerationProject(),
     batchId: options.batchId || "",
+    generationLog: state.generationLog || [],
+    generationRunId: state.generationRunId || "",
   });
 
   state.articleSave = data;
+  appendGenerationLog("保存 Markdown 和日志文件完成", {
+    articlePath: data.relativePath || "",
+    logPath: data.logRelativePath || "",
+  });
   if ($("articleSaveStatus")) {
-    $("articleSaveStatus").textContent = `已自动保存：${data.relativePath}`;
+    $("articleSaveStatus").textContent = `已自动保存：${data.relativePath}${data.logRelativePath ? `；日志：${data.logRelativePath}` : ""}`;
   }
   return data;
 }
@@ -5130,30 +5643,57 @@ async function generateArticle(options = {}) {
   const item = selectedItem();
   if (!item) return;
 
+  resetGenerationLog("生成文章", item);
+  assertArticleGenerationReady(item);
   state.articleSave = null;
   await ensureArticlePrompt(item);
   const stageKey = $("articleStageInput").value;
   const stage = state.aiStages[stageKey] || state.aiStages.articleGeneration;
+  appendGenerationLog("文章生成阶段确认", {
+    stageKey,
+    label: stage.label || "",
+    provider: stage.provider || "",
+    model: stage.model || "",
+    apiFormat: stage.apiFormat || "",
+    endpoint: stage.endpoint || "/api/generate",
+    isLocalMock: stage.provider === "local" || stage.apiFormat === "local",
+  });
 
   if (stage.provider === "local" || stage.apiFormat === "local") {
+    appendGenerationLog("使用 Local/Mock 生成文章", {
+      endpoint: "/api/workflow/mock-article",
+      note: "不会调用外部 AI；即使 Prompt 里有 SERP，上游 mock 文章也不会真正消化 SERP。",
+    }, "warn");
     const data = await api("/api/workflow/mock-article", {
       keyword: item,
       project: articleGenerationProject(),
       aiStage: stage,
     });
     state.article = data.content || "";
+    appendGenerationLog("Local/Mock 文章生成完成", {
+      articleLength: state.article.length,
+      rawMockResponse: data,
+    });
     renderGeneration();
     try {
       const saveData = await saveGeneratedArticleToServer(item, options);
       rememberGeneratedArticle(item, saveData, options);
       saveWorkspaceDraft("文章草稿已自动保存到本机浏览器和本地 Markdown 目录。");
     } catch (error) {
+      appendGenerationLog("保存失败", { message: error.message }, "error");
       $("articleSaveStatus").textContent = `文章已生成，但保存到本地目录失败：${error.message}`;
       saveWorkspaceDraft("文章草稿已自动保存到本机浏览器；本地 Markdown 保存失败。");
     }
     return;
   }
 
+  appendGenerationLog("外部 AI 文章生成请求开始", {
+    endpoint: stage.endpoint || "/api/generate",
+    provider: stage.provider,
+    model: stage.model,
+    promptLength: state.prompt.length,
+    prompt: state.prompt,
+  });
   setArticleOutput(`正在请求 ${stage.label} 阶段 AI：${stage.provider} / ${stage.model}`);
   const response = await fetch(stage.endpoint || "/api/generate", {
     method: "POST",
@@ -5171,13 +5711,25 @@ async function generateArticle(options = {}) {
 
   if (!response.ok) throw new Error(`API returned ${response.status}`);
   const data = await response.json();
-  state.article = data.content || data.text || JSON.stringify(data, null, 2);
+  appendGenerationLog("外部 AI 文章生成请求完成", {
+    configured: data.configured,
+    status: data.status || null,
+    error: data.error || "",
+    provider: data.provider || stage.provider || "",
+    model: data.model || stage.model || "",
+    rawAiResponse: data,
+  });
+  state.article = extractArticleContentFromAiResponse(data);
+  appendGenerationLog("外部 AI 正文校验通过", {
+    articleLength: state.article.length,
+  });
   renderGeneration();
   try {
     const saveData = await saveGeneratedArticleToServer(item, options);
     rememberGeneratedArticle(item, saveData, options);
     saveWorkspaceDraft("文章草稿已自动保存到本机浏览器和本地 Markdown 目录。");
   } catch (error) {
+    appendGenerationLog("保存失败", { message: error.message }, "error");
     $("articleSaveStatus").textContent = `文章已生成，但保存到本地目录失败：${error.message}`;
     saveWorkspaceDraft("文章草稿已自动保存到本机浏览器；本地 Markdown 保存失败。");
   }
@@ -5774,6 +6326,7 @@ function bindEvents() {
     contentHubLoadState.lastLoadedKey = "";
     contentHubLoadState.lastLoadedAt = 0;
     renderContentHub();
+    renderBulkPublish();
     const site = selectedContentSite();
     $("contentHubStatus").textContent = site
       ? `已选择 ${site.name}。为避免重复请求远程 API，请点击“读取/刷新文章”后再规划内容机会。`
@@ -5830,6 +6383,22 @@ function bindEvents() {
   $("batchUploadGeneratedBtn").addEventListener("click", () =>
     withButtonBusy("batchUploadGeneratedBtn", () =>
       uploadGeneratedArticlesToContentSite().catch((error) => ($("contentHubStatus").textContent = `批量导入失败：${error.message}`)),
+    ),
+  );
+  $("bulkPublishAiReviewInput").addEventListener("change", () => {
+    state.bulkPublish.autoAiReview = $("bulkPublishAiReviewInput").checked;
+    renderBulkPublish();
+    saveWorkspaceDraft();
+  });
+  $("bulkPublishAutoUploadInput").addEventListener("change", () => {
+    state.bulkPublish.autoPublish = $("bulkPublishAutoUploadInput").checked;
+    renderBulkPublish();
+    saveWorkspaceDraft();
+  });
+  $("saveCurrentBulkPlanBtn").addEventListener("click", () => saveCurrentBulkPublishPlan());
+  $("runBulkPublishBtn").addEventListener("click", () =>
+    withButtonBusy("runBulkPublishBtn", () =>
+      runBulkPublish().catch((error) => ($("bulkPublishStatus").textContent = `批量发布失败：${error.message}`)),
     ),
   );
   $("googleDataSourceSelect").addEventListener("change", () => {
