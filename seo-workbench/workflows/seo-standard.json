@@ -367,6 +367,199 @@
       "If article content is only a preview, mark conclusions as provisional."
     ]
   },
+  "globalPlanning": {
+    "name": "Global SEO Brain Planning Standard",
+    "purpose": "把站点资产、关键词池、文章库存、GSC/GA4、SERP 和产品承接页统一成可执行任务队列，明确今天写哪几篇、更新哪几篇、哪些词先不做。",
+    "source": "Derived from 01_keyword_allocation, 02_article_brief, 03_content_calendar, siteContentDiagnosis, localePolicy, SerpApi validation, GSC/GA4 monthly review, and product asset extraction.",
+    "planningPrinciple": "先补齐数据，再判断动作；先更新已有机会，再生产新内容；先按市场/语种分桶，再分站点和文章类型；AI 只能解释和排序，不能绕过硬门槛。",
+    "requiredInputs": [
+      "Target market / language / Semrush database",
+      "Configured sites with market, language, and content role",
+      "Product or commercial page assets for main-site commercial support",
+      "Semrush keyword pool for the same market",
+      "Existing post inventory for matched sites",
+      "GSC / GA4 review data when deciding update priorities",
+      "SerpApi Google Top 10 result for final page-type validation"
+    ],
+    "hardGates": [
+      {
+        "key": "targetMarket",
+        "priority": "P0",
+        "label": "补齐项目目标市场",
+        "blocker": "没有目标市场时，语言、Semrush 数据库和 Google SERP gl/hl 都无法稳定。",
+        "blocks": ["new_article", "update_article", "publish"]
+      },
+      {
+        "key": "singleMarket",
+        "priority": "P0",
+        "label": "先切到单一市场再生产内容",
+        "blocker": "全部市场只适合看资产总览，不能直接进入关键词规划或文章生成。",
+        "blocks": ["new_article", "update_article", "publish"]
+      },
+      {
+        "key": "splitLocale",
+        "priority": "P0",
+        "label": "拆分多国家或多语种关键词池",
+        "blocker": "EU / Global 不是一个可执行 SERP 市场，需要按国家和语言拆开。",
+        "blocks": ["new_article", "update_article", "publish"]
+      },
+      {
+        "key": "siteProfiles",
+        "priority": "P1",
+        "label": "补齐站点档案",
+        "blocker": "每个站点需要市场、语言和内容角色，否则站群分词会混乱。",
+        "blocks": ["bulk_generation"]
+      },
+      {
+        "key": "productAssets",
+        "priority": "P0",
+        "label": "提取主站产品资产",
+        "blocker": "主站负责商业承接，产品/集合页资产缺失会让文章无法判断应该承接到哪里。",
+        "blocks": ["main_site_commercial_content", "commercial_cta"]
+      },
+      {
+        "key": "keywordPool",
+        "priority": "P0",
+        "label": "导入或切换到匹配当前市场的 Semrush 关键词池",
+        "blocker": "全局大脑需要同市场关键词池来判断新写、更新、合并或暂不做。",
+        "blocks": ["planning", "new_article"]
+      },
+      {
+        "key": "postInventory",
+        "priority": "P1",
+        "label": "刷新当前市场站点文章库存",
+        "blocker": "没有文章库存时，无法判断已覆盖、部分覆盖、重复竞争或应更新旧文。",
+        "blocks": ["update_decision", "cannibalization_check"]
+      },
+      {
+        "key": "reviewData",
+        "priority": "P1",
+        "label": "拉取 GSC / GA4 复盘数据",
+        "blocker": "没有真实表现数据时，只能规划新内容，不能可靠判断旧文更新优先级。",
+        "blocks": ["update_priority"]
+      },
+      {
+        "key": "serpData",
+        "priority": "P0",
+        "label": "拉取真实 SERP Top 10",
+        "blocker": "最终判断写文章、做集合页、产品页或暂不做，需要真实 SERP 前 10。",
+        "blocks": ["final_page_type_decision", "article_generation"]
+      }
+    ],
+    "decisionTypes": {
+      "new_article": {
+        "label": "新写文章",
+        "when": [
+          "关键词与当前市场、站点角色、语言匹配。",
+          "关键词 P0/P1 或经 AI 复核后分数达到新写阈值。",
+          "文章库存中没有同意图、同主关键词或可更新的旧文。",
+          "SERP 前排主要是文章、指南、对比、FAQ、榜单或商业前教育内容。",
+          "能规划出明确父级承接页、内链路径、原创证据和 Image Placement Map。"
+        ]
+      },
+      "update_article": {
+        "label": "更新旧文",
+        "when": [
+          "已有文章覆盖同关键词或同意图，但结构薄、缺 FAQ、缺对比表、缺内链或缺原创证据。",
+          "GSC 有曝光但点击低，或平均排名卡在 4-20 名。",
+          "已有文章与 SERP 获胜类型一致，只需要补强标题、段落、FAQ、证据或内链。",
+          "内容重叠风险高，不宜再开新 URL。"
+        ]
+      },
+      "merge_or_redirect": {
+        "label": "合并 / 重定向",
+        "when": [
+          "两个以上 URL 针对同一个主关键词或同一搜索意图。",
+          "旧文都偏薄，分散内链和主题权重。",
+          "SERP 只需要一个强页面承接，而不是多个相似文章。"
+        ]
+      },
+      "commercial_page": {
+        "label": "做集合页 / 产品页",
+        "when": [
+          "SERP 前排主要是分类页、产品页、电商列表页或品牌页。",
+          "关键词明显交易型或商品集合型。",
+          "主站存在或可创建真实承接资产。"
+        ]
+      },
+      "hold": {
+        "label": "暂不做",
+        "when": [
+          "市场或语种不匹配。",
+          "关键词与核心产品或站点定位弱相关。",
+          "风险词、合规敏感词、未成年人、本地 near me、非法或站点不适合承接。",
+          "KD 过高且商业价值、站点权重、内容差异化不足。",
+          "SERP 被大品牌、平台页或本地结果完全占据，短期没有可执行突破点。"
+        ]
+      }
+    },
+    "scoring": {
+      "maxScore": 100,
+      "weights": {
+        "keywordPriority": 18,
+        "commercialFit": 16,
+        "siteRoleFit": 14,
+        "coverageGap": 14,
+        "serpPageTypeFit": 14,
+        "reviewOpportunity": 10,
+        "productAssetFit": 8,
+        "difficultyPenalty": -10,
+        "riskPenalty": -20
+      },
+      "thresholds": {
+        "writeNow": 78,
+        "updateNow": 72,
+        "needsSerpBeforeDecision": 60,
+        "holdBelow": 50
+      },
+      "tieBreakers": [
+        "先 P0 后 P1。",
+        "先能承接产品/集合页的商业前教育词。",
+        "先有 SERP 数据且页面类型明确的词。",
+        "先能补现有站点主题缺口的词。",
+        "同分时优先低 KD、高相关、可自然内链的词。"
+      ]
+    },
+    "capacityRules": {
+      "dailyNewArticlesDefault": 3,
+      "dailyUpdatesDefault": 3,
+      "maxNewArticlesPerSitePerDay": 1,
+      "maxSameTopicClusterPerDay": 1,
+      "minimumUpdateRatioWhenReviewDataExists": 0.4,
+      "notes": [
+        "如果 GSC/GA4 已有数据，不能只安排新文章；至少 40% 任务应考虑旧文更新。",
+        "同一天不要在多个站点写同一主题或同一主关键词，避免站群内耗。",
+        "非主站博客站早期只做本站内链，不给主站或产品页外链。"
+      ]
+    },
+    "siteConstraints": [
+      "主站集合页承接交易型、分类型、产品集合型关键词。",
+      "主站博客可写商业前教育、选购指南、对比前置内容，但必须服务主站承接页。",
+      "博客A 优先知识教程、FAQ、合规科普、定义解释。",
+      "博客B 优先场景人群、需求解决、口味灵感、新手选择。",
+      "博客C 优先对比评测、Best、VS、替代方案。",
+      "非主站文章默认禁止给主站或产品页外链，除非人工改站点策略。"
+    ],
+    "outputFormat": [
+      "## 全局规划摘要",
+      "## 数据缺口 / 硬门槛",
+      "## 今天新写队列",
+      "## 今天更新队列",
+      "## 合并 / 重定向建议",
+      "## 暂不做关键词",
+      "## SERP 待校验关键词",
+      "## 站点分配与产能",
+      "## 下一步执行清单"
+    ],
+    "aiRules": [
+      "AI 只能按照 globalPlanning 标准解释、排序和生成任务，不允许绕过 hardGates。",
+      "没有真实 SERP 数据时，不能输出最终页面类型，只能标记 needsSerpCheck。",
+      "没有文章库存时，不能判断某词未覆盖，只能标记 inventoryMissing。",
+      "没有 GSC/GA4 时，不能声称旧文表现差，只能根据内容库存做结构性更新建议。",
+      "每条任务必须输出 decision、priority、score、targetSite、keyword、reason、requiredData、nextAction。",
+      "暂不做也必须说明原因和重新评估条件。"
+    ]
+  },
   "articleOutputFormat": {
     "name": "WordPress Import Markdown",
     "purpose": "文章必须按可脚本化导入 WordPress 的 Markdown 块格式输出；顶部 SEO 字段用于回填 Rank Math，正文用于转换 Gutenberg 区块，不能把正文、SEO 字段、图片位置和内链建议混在一起。",

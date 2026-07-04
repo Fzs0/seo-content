@@ -3307,6 +3307,9 @@ function renderStandard() {
   const references = state.standard.references?.triggers || {};
   const anchorTextRules = state.standard.anchorTextRules || {};
   const sheets = state.standard.excelSheets || {};
+  const globalPlanning = state.standard.globalPlanning || {};
+  const globalThresholds = globalPlanning.scoring?.thresholds || {};
+  const globalCapacity = globalPlanning.capacityRules || {};
   if (!state.standardDirty && document.activeElement !== $("standardEditor")) {
     $("standardEditor").value = JSON.stringify(state.standard, null, 2);
   }
@@ -3318,6 +3321,10 @@ function renderStandard() {
     ["References", Object.keys(references).length ? Object.keys(references).join(" / ") : "0 引用默认允许"],
     ["锚文本规则", anchorTextRules.policy || "natural_contextual_variation"],
     ["文章输出格式", state.standard.articleOutputFormat?.name || "WordPress Import Markdown"],
+    ["全局规划标准", globalPlanning.name || "未配置"],
+    ["大脑硬门槛", `${globalPlanning.hardGates?.length || 0} 条`],
+    ["全局执行阈值", `新写 ${globalThresholds.writeNow || "-"} / 更新 ${globalThresholds.updateNow || "-"}`],
+    ["默认日产能", `新写 ${globalCapacity.dailyNewArticlesDefault || "-"} / 更新 ${globalCapacity.dailyUpdatesDefault || "-"}`],
   ]
     .map(([title, body]) => `<div class="summary-card"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></div>`)
     .join("");
@@ -4302,25 +4309,46 @@ function globalBrainSnapshot() {
   };
 }
 
+function globalPlanningStandard() {
+  return state.standard?.globalPlanning || {};
+}
+
+function globalPlanningHardGate(key) {
+  return (globalPlanningStandard().hardGates || []).find((gate) => gate.key === key) || {};
+}
+
+function globalPlanningTask(key, fallbackPriority, fallbackLabel, fallbackReason, detail = "") {
+  const gate = globalPlanningHardGate(key);
+  return [
+    gate.priority || fallbackPriority,
+    detail || gate.label || fallbackLabel,
+    gate.blocker || fallbackReason,
+  ];
+}
+
 function globalBrainTasks({ sites = [], incompatibleSites = [], products = [], posts = [], keywords = [], opportunities = [], scopeLocale = {}, hasSerpData = false } = {}) {
   const tasks = [];
   const project = readProject();
+  const planning = globalPlanningStandard();
+  const capacity = planning.capacityRules || {};
+  const maxNewArticles = Number(capacity.dailyNewArticlesDefault || 3);
   const unprofiledSites = sites.filter((site) => !site.profile?.targetMarket && !site.profile?.targetLanguage);
   const p0Keywords = keywords.filter((item) => item.priority === "P0");
-  const newArticleOpps = opportunities.filter((item) => /新写|create|article/i.test(item.action || "")).slice(0, 6);
+  const newArticleOpps = opportunities.filter((item) => /新写|create|article/i.test(item.action || "")).slice(0, maxNewArticles);
 
-  if (!project.market) tasks.push(["P0", "补齐项目目标市场", "没有目标市场时，语言、Semrush 数据库和 Google SERP gl/hl 都无法稳定。"]);
-  if (state.globalBrain.selectedMarket === "__all__") tasks.push(["P0", "先切到单一市场再生产内容", "全部市场只适合看资产总览，不能直接进入关键词规划或文章生成。"]);
-  if (scopeLocale?.configured && !scopeLocale.semrushDatabase) tasks.push(["P0", "拆分多国家或多语种关键词池", "EU / Global 不是一个可执行 SERP 市场，需要按国家和语言拆开。"]);
-  if (!products.length) tasks.push(["P0", "提取主站产品资产", "主站负责商业承接，产品/集合页资产缺失会让文章无法判断应该承接到哪里。"]);
-  if (!keywords.length) tasks.push(["P0", "导入或切换到匹配当前市场的 Semrush 关键词池", "全局大脑需要同市场关键词池来判断新写、更新、暂不做。"]);
-  if (!state.googleReviewData) tasks.push(["P1", "拉取 GSC / GA4 复盘数据", "没有表现数据时，只能做规划，不能判断文章和站点真实效果。"]);
-  if (unprofiledSites.length) tasks.push(["P1", `补齐 ${unprofiledSites.length} 个站点档案`, "每个站点需要市场、语言和内容角色，否则站群分词会混乱。"]);
-  if (incompatibleSites.length) tasks.push(["P1", `处理 ${incompatibleSites.length} 个市场/语言不匹配站点`, "不匹配站点应隐藏、修正市场，或单独导入对应国家关键词。"]);
+  if (!project.market) tasks.push(globalPlanningTask("targetMarket", "P0", "补齐项目目标市场", "没有目标市场时，语言、Semrush 数据库和 Google SERP gl/hl 都无法稳定。"));
+  if (state.globalBrain.selectedMarket === "__all__") tasks.push(globalPlanningTask("singleMarket", "P0", "先切到单一市场再生产内容", "全部市场只适合看资产总览，不能直接进入关键词规划或文章生成。"));
+  if (scopeLocale?.configured && !scopeLocale.semrushDatabase) tasks.push(globalPlanningTask("splitLocale", "P0", "拆分多国家或多语种关键词池", "EU / Global 不是一个可执行 SERP 市场，需要按国家和语言拆开。"));
+  if (!products.length) tasks.push(globalPlanningTask("productAssets", "P0", "提取主站产品资产", "主站负责商业承接，产品/集合页资产缺失会让文章无法判断应该承接到哪里。"));
+  if (!keywords.length) tasks.push(globalPlanningTask("keywordPool", "P0", "导入或切换到匹配当前市场的 Semrush 关键词池", "全局大脑需要同市场关键词池来判断新写、更新、合并或暂不做。"));
+  if (!state.googleReviewData) tasks.push(globalPlanningTask("reviewData", "P1", "拉取 GSC / GA4 复盘数据", "没有真实表现数据时，只能规划新内容，不能可靠判断旧文更新优先级。"));
+  if (!posts.length && sites.length) tasks.push(globalPlanningTask("postInventory", "P1", "刷新当前市场站点文章库存", "没有文章库存时，无法判断已覆盖、部分覆盖、重复竞争或应更新旧文。"));
+  if (unprofiledSites.length) tasks.push(globalPlanningTask("siteProfiles", "P1", "补齐站点档案", "每个站点需要市场、语言和内容角色，否则站群分词会混乱。", `补齐 ${unprofiledSites.length} 个站点档案`));
+  if (incompatibleSites.length) tasks.push(globalPlanningTask("siteProfiles", "P1", "处理市场/语言不匹配站点", "不匹配站点应隐藏、修正市场，或单独导入对应国家关键词。", `处理 ${incompatibleSites.length} 个市场/语言不匹配站点`));
   if (!opportunities.length && keywords.length && sites.length) tasks.push(["P1", "为目标站点生成内容机会池", "需要把已有文章和关键词池合并，判断哪些词未覆盖、哪些旧文该更新。"]);
-  if (newArticleOpps.length) tasks.push(["P0", `优先生产 ${newArticleOpps.length} 个新文章机会`, newArticleOpps.map((item) => item.keyword).join(" / ")]);
+  if (newArticleOpps.length) tasks.push(["P0", `优先生产 ${newArticleOpps.length} 个新文章机会`, `${newArticleOpps.map((item) => item.keyword).join(" / ")}；按标准默认日产能最多 ${maxNewArticles} 篇。`]);
   if (posts.length && p0Keywords.length && !opportunities.length) tasks.push(["P2", "用现有文章反查 P0 关键词覆盖", "已有文章库已经存在，但还没有转成全局机会池和更新任务。"]);
-  if (!hasSerpData) tasks.push(["P0", "接入真实 SERP 校验", "这是从工作台升级成 Agent 的关键：判断写文章、做集合页还是暂不做，需要真实 SERP 前 10。"]);
+  if (!hasSerpData) tasks.push(globalPlanningTask("serpData", "P0", "拉取真实 SERP Top 10", "最终判断写文章、做集合页、产品页或暂不做，需要真实 SERP 前 10。"));
 
   return tasks;
 }
@@ -4334,6 +4362,9 @@ function renderGlobalBrain() {
   const mainKeywords = keywords.filter((item) => String(item.assignedSite || "").startsWith("主站")).length;
   const blogKeywords = keywords.filter((item) => String(item.assignedSite || "").startsWith("博客")).length;
   const tasks = globalBrainTasks({ sites, incompatibleSites, products, posts, keywords, opportunities, scopeLocale, hasSerpData });
+  const planning = globalPlanningStandard();
+  const planningThresholds = planning.scoring?.thresholds || {};
+  const planningCapacity = planning.capacityRules || {};
   const siteRows = sites.map((site) => {
     const profile = site.profile || inferSiteProfile(site);
     return [
@@ -4358,6 +4389,14 @@ function renderGlobalBrain() {
     ["产品资产", products.length ? "READY" : "MISSING", `${products.length} 个产品/商业承接资产`],
     ["GSC / GA4", review ? "READY" : "MISSING", review ? "已缓存复盘数据，刷新页面不会丢" : "需要手动拉取真实表现数据"],
     ["SERP Top 10", hasSerpData ? "READY" : "WAITING", hasSerpData ? `${state.serpData.query || ""} / gl=${state.serpData.gl || "-"} / hl=${state.serpData.hl || "-"}` : "保存 SerpApi 后，拉取当前关键词用于最终页面类型校验"],
+  ];
+  const standardRows = [
+    ["规划标准", planning.name || "未配置", planning.planningPrinciple || "请先在 SEO 标准配置里保存 globalPlanning。"],
+    ["硬门槛", `${planning.hardGates?.length || 0} 条`, "P0 会阻断生产，P1/P2 进入补数或复核队列。"],
+    ["新写阈值", planningThresholds.writeNow || "-", "达到阈值且通过 SERP 页面类型校验，才进入新写队列。"],
+    ["更新阈值", planningThresholds.updateNow || "-", "已有文章可更新时优先更新，不盲目新增相似 URL。"],
+    ["默认日产能", `新写 ${planningCapacity.dailyNewArticlesDefault || "-"} / 更新 ${planningCapacity.dailyUpdatesDefault || "-"}`, "限制同主题、同站点的批量生产，避免站群内耗。"],
+    ["更新占比", planningCapacity.minimumUpdateRatioWhenReviewDataExists ? `${Math.round(planningCapacity.minimumUpdateRatioWhenReviewDataExists * 100)}%` : "-", "有 GSC/GA4 后不能只写新文章，必须分配旧文优化任务。"],
   ];
   const postCacheRows = sites.map((site) => {
     const entry = state.globalBrain.postsBySite?.[site.key] || {};
@@ -4419,6 +4458,15 @@ function renderGlobalBrain() {
         ${dashboardMetric("REVIEW DATA", review ? "READY" : "MISSING", review ? "GSC/GA4 已缓存" : "等待复盘数据", review ? "#2f7668" : "#c46a2b")}
         ${dashboardMetric("SERP", hasSerpData ? "READY" : "WAITING", hasSerpData ? "已缓存真实 SERP" : "等待拉取 SERP", hasSerpData ? "#2f7668" : "#c46a2b")}
       </div>
+    </section>
+
+    <section class="review-report-section global-brain-section">
+      <div class="review-report-section-head">
+        <p>PLANNING STANDARD</p>
+        <h4>全局规划标准</h4>
+        <span>大脑不再自由评判，而是按这套标准决定：今天写哪几篇、更新哪几篇、哪些词先不做。</span>
+      </div>
+      ${reportDataTable(["标准项", "当前值", "执行口径"], standardRows)}
     </section>
 
     <section class="review-report-section global-brain-section">
