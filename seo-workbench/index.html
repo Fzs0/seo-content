@@ -21,6 +21,7 @@
           <a href="/page-setup" data-page-target="setup">项目设置</a>
           <a href="/page-keywords" data-page-target="keywords">关键词池</a>
           <a href="/page-intelligence" data-page-target="intelligence">内容中枢</a>
+          <a href="/page-global-brain" data-page-target="globalBrain">全局大脑</a>
           <a href="/page-review" data-page-target="review">复盘数据</a>
           <a href="/page-production" data-page-target="production">生产</a>
           <a href="/page-publishing" data-page-target="publishing">发布</a>
@@ -251,12 +252,6 @@
         </section>
 
         <section class="panel" id="review-data">
-          <div class="review-view-tabs">
-            <button class="active" type="button">All Views</button>
-            <button type="button">Executive View</button>
-            <button type="button">SEO Analyst View</button>
-            <button type="button">Action Plan View</button>
-          </div>
           <div class="review-hero">
             <div class="review-hero-copy">
               <p class="eyebrow">Monthly SEO Review Dashboard</p>
@@ -554,6 +549,60 @@
             <h4>批量生成日志</h4>
             <pre class="markdown-box compact-box scroll-box" id="batchGenerationLog">还没有批量生成任务。</pre>
           </article>
+        </section>
+
+        <section class="panel" id="global-brain">
+          <div class="review-hero global-brain-hero">
+            <div class="review-hero-copy">
+              <p class="eyebrow">Global SEO Brain</p>
+              <h3>全局大脑看板</h3>
+              <p>
+                这里不负责单篇文章，而是把主站、博客站群、产品资产、关键词池、GSC/GA4 复盘数据放在同一个脑图里，判断系统下一步应该写什么、更新什么、补什么内链、哪些数据还缺。
+              </p>
+            </div>
+            <div class="review-hero-actions">
+              <button class="soft-btn" id="refreshGlobalBrainBtn">按当前市场刷新看板</button>
+              <button class="primary-btn" id="buildGlobalTasksBtn">生成本地任务池</button>
+            </div>
+          </div>
+
+          <div class="global-brain-controls">
+            <label>
+              <span>分析市场 / 语种</span>
+              <select id="globalBrainMarketInput"></select>
+            </label>
+            <label class="toggle-row">
+              <input type="checkbox" id="globalBrainMarketIsolationInput" checked />
+              <span>按市场和语种隔离，不混用关键词、站点和文章</span>
+            </label>
+          </div>
+
+          <details class="site-api-details serpapi-panel" open>
+            <summary>SERP API 数据源：用于校验 Google 前 10、PAA、相关搜索和页面类型</summary>
+            <div class="serpapi-grid">
+              <label>
+                SerpApi Private API Key
+                <input id="serpApiKeyInput" type="password" placeholder="留空表示不修改已保存 Key" />
+              </label>
+              <label>
+                测试关键词
+                <input id="serpTestQueryInput" type="text" placeholder="留空则使用当前选中的关键词" />
+              </label>
+              <label class="toggle-row danger-toggle">
+                <input type="checkbox" id="clearSerpApiKeyInput" />
+                <span>清除已保存的 SerpApi Key</span>
+              </label>
+              <div class="serpapi-actions">
+                <button class="soft-btn" id="saveSerpApiConfigBtn">保存配置</button>
+                <button class="primary-btn" id="testSerpApiBtn">拉取 SERP</button>
+              </div>
+            </div>
+            <pre id="serpDataOutput" class="markdown-box compact-box scroll-box">还没有 SERP 数据。保存 SerpApi 后，可测试当前关键词。</pre>
+            <p class="inline-status" id="serpApiStatus">SerpApi 尚未读取。</p>
+          </details>
+
+          <div class="review-data-results global-brain-results" id="globalBrainResults"></div>
+          <p class="inline-status" id="globalBrainStatus">全局大脑会读取当前工作台已经缓存的数据，不会自动请求远程 API 或调用 AI。</p>
         </section>
 
         <section class="panel split-panel" id="brief">
