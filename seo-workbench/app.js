@@ -148,6 +148,7 @@ const state = {
     autoPublish: true,
     log: "",
     lastRunAt: "",
+  },
   globalBrain: {
     selectedMarket: "__project__",
     requireMarketIsolation: true,
