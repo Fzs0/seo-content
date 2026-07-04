@@ -111,8 +111,20 @@ async function callOpenAiCompatible({ payload, stage, config }) {
     };
   }
 
+  const content = String(extractOpenAiContent(data) || "").trim();
+  if (!content) {
+    return {
+      content: "",
+      raw: data,
+      configured: true,
+      status: "empty-content",
+      error:
+        "AI returned no assistant content. The response may contain reasoning_content only, which is not a publishable article.",
+    };
+  }
+
   return {
-    content: extractOpenAiContent(data) || JSON.stringify(data, null, 2),
+    content,
     raw: data,
     configured: true,
   };

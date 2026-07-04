@@ -102,6 +102,9 @@ const state = {
   article: "",
   articleParts: null,
   articleSave: null,
+  briefInfo: null,
+  generationLog: [],
+  generationRunId: "",
   aiStages: loadAiStages(),
   wpSites: [],
   selectedWpSiteId: "",
@@ -547,13 +550,40 @@ function serpMatchesItem(item = selectedItem(), locale = articleGenerationProjec
 async function ensureSerpForArticle(item = selectedItem()) {
   const project = articleGenerationProject();
   const locale = project.locale || {};
-  if (!item?.keyword || !state.serpApiConfig?.enabled) return null;
-  if (serpMatchesItem(item, locale)) return state.serpData;
+  if (!item?.keyword) {
+    appendGenerationLog("SERP 跳过：没有当前关键词", {}, "warn");
+    return null;
+  }
+  if (!state.serpApiConfig?.enabled) {
+    appendGenerationLog("SERP 跳过：SerpApi 未配置或未启用", {
+      keyword: item.keyword,
+      gl: locale.googleGl || "",
+      hl: locale.googleHl || "",
+    }, "warn");
+    return null;
+  }
+  if (serpMatchesItem(item, locale)) {
+    appendGenerationLog("SERP 使用缓存", {
+      query: state.serpData?.query || "",
+      gl: state.serpData?.gl || "",
+      hl: state.serpData?.hl || "",
+      organicResults: state.serpData?.organicResults?.length || 0,
+      serpApiResponse: state.serpData || null,
+    });
+    return state.serpData;
+  }
 
   const statusTarget = $("serpApiStatus") || $("articleSaveStatus") || $("contentHubStatus");
   if (statusTarget) {
     statusTarget.textContent = `正在为文章生成拉取 SERP：${item.keyword}（gl=${locale.googleGl || "-"} / hl=${locale.googleHl || "-"}）`;
   }
+  appendGenerationLog("SERP API 请求开始", {
+    endpoint: "/api/serpapi/search",
+    query: item.keyword,
+    gl: locale.googleGl || "",
+    hl: locale.googleHl || "",
+    num: 10,
+  });
   const data = await api("/api/serpapi/search", {
     query: item.keyword,
     locale,
@@ -562,6 +592,15 @@ async function ensureSerpForArticle(item = selectedItem()) {
   state.serpData = data;
   renderSerpApiConfig();
   renderGlobalBrain();
+  appendGenerationLog("SERP API 请求完成", {
+    query: data.query || item.keyword,
+    gl: data.gl || "",
+    hl: data.hl || "",
+    organicResults: data.organicResults?.length || 0,
+    relatedQuestions: data.relatedQuestions?.length || 0,
+    relatedSearches: data.relatedSearches?.length || 0,
+    serpApiResponse: data,
+  });
   return data;
 }
 
@@ -887,9 +926,12 @@ function saveWorkspaceDraft(message = "") {
       tablePage: state.tablePage,
       pageSize: state.pageSize,
       brief: state.brief,
+      briefInfo: state.briefInfo,
       prompt: state.prompt,
       article: state.article,
       articleSave: state.articleSave,
+      generationLog: state.generationLog,
+      generationRunId: state.generationRunId,
       activePage: state.activePage,
       contentHub: serializableContentHubDraft(),
       bulkPublish: state.bulkPublish,
@@ -932,10 +974,13 @@ function restoreWorkspaceDraft() {
     state.tablePage = Number(draft.tablePage) || 1;
     state.pageSize = Number(draft.pageSize) || 50;
     state.brief = draft.brief || "";
+    state.briefInfo = draft.briefInfo || null;
     state.prompt = draft.prompt || "";
     state.article = draft.article || "";
     state.articleParts = splitArticleForWp(state.article);
     state.articleSave = draft.articleSave || null;
+    state.generationLog = Array.isArray(draft.generationLog) ? draft.generationLog : [];
+    state.generationRunId = draft.generationRunId || "";
     state.activePage = draft.activePage || state.activePage;
     state.globalBrain = {
       ...state.globalBrain,
@@ -1696,6 +1741,14 @@ function articlePageTypeForOpportunity(item = {}, source = contentSourceType()) 
 function buildContentOpportunity(item = {}, source = contentSourceType(), posts = postsForContentSite(), site = selectedContentSite()) {
   const coverage = keywordCoverage(item.keyword, posts);
   if (!isArticleKeywordCandidate(item, source)) return null;
+  const siteProfileForLocale = site ? inferSiteProfile(site) : {};
+  if (
+    item.locale?.configured &&
+    siteProfileForLocale.locale?.configured &&
+    !localeMatchesScope(item.locale, siteProfileForLocale.locale, false)
+  ) {
+    return null;
+  }
   const roleMatch = keywordRoleMatchesSite(item, site);
   if (!roleMatch.compatible) return null;
 
@@ -3271,6 +3324,45 @@ function renderArticleParts(content = state.article) {
   $("articleOutput").textContent = parts.full || "这里会显示完整 Markdown。";
 }
 
+function formatGenerationLog(entries = state.generationLog || []) {
+  if (!entries.length) return "还没有生成过程日志。点击“生成 Prompt”或“生成文章”后会写入本地 .log 文件。";
+  return entries
+    .map((entry, index) => {
+      const time = entry.time ? new Date(entry.time).toLocaleTimeString() : "";
+      const details = entry.details && Object.keys(entry.details).length
+        ? `\n${JSON.stringify(entry.details, null, 2)}`
+        : "";
+      return `${index + 1}. [${time}] ${entry.level || "info"} · ${entry.step}${details}`;
+    })
+    .join("\n\n");
+}
+
+function renderGenerationLog() {
+  // Generation logs are written to the local .log file with the article, not rendered in the UI.
+}
+
+function resetGenerationLog(label = "生成流程", item = selectedItem()) {
+  state.generationRunId = requestId("generation");
+  state.generationLog = [];
+  appendGenerationLog(`${label}开始`, {
+    runId: state.generationRunId,
+    keyword: item?.keyword || "",
+    selectedMarket: readProject().market || "",
+  });
+}
+
+function appendGenerationLog(step, details = {}, level = "info") {
+  const entry = {
+    time: new Date().toISOString(),
+    level,
+    step,
+    details,
+  };
+  state.generationLog = [...(state.generationLog || []), entry].slice(-120);
+  renderGenerationLog();
+  return entry;
+}
+
 function setArticleOutput(message) {
   renderArticleParts(String(message || ""));
   if ($("articleSaveStatus") && !state.articleSave) {
@@ -3421,12 +3513,17 @@ function renderTable() {
 
 function renderBrief() {
   const item = selectedItem();
+  const briefInfo = state.briefInfo || {};
+  const briefSourceLabel = briefInfo.aiEnhanced
+    ? `Brief: AI增强 ${briefInfo.provider || ""} ${briefInfo.model || ""}${briefInfo.cached ? " · 缓存" : ""}`
+    : `Brief: 本地规则${briefInfo.reason ? ` · ${briefInfo.reason}` : ""}`;
   $("briefTitle").textContent = item ? item.keyword : "请选择一个关键词";
   $("briefMeta").innerHTML = item
     ? `
       <span class="badge ${item.assignedSite?.startsWith("主站") ? "main" : ""}">${escapeHtml(item.assignedSite)}</span>
       <span class="badge">${escapeHtml(item.pageType)}</span>
       <span class="badge">${escapeHtml(item.priority)} · ${escapeHtml(item.scores?.total || 0)}</span>
+      <span class="badge ${briefInfo.aiEnhanced ? "ai" : ""}">${escapeHtml(briefSourceLabel.trim())}</span>
     `
     : "";
   $("briefOutput").textContent = state.brief || "选择关键词后，这里会生成可交给 AI 或写手的 Brief。";
@@ -3509,9 +3606,10 @@ function renderAiStages() {
 function renderGeneration() {
   $("promptOutput").value = state.prompt || "";
   renderArticleParts(state.article || "这里会显示 AI 复核结果或文章 Markdown。Local/Mock 阶段不会调用外部 API；外部阶段会通过服务端代理转发。");
+  renderGenerationLog();
   if ($("articleSaveStatus")) {
     $("articleSaveStatus").textContent = state.articleSave?.relativePath
-      ? `已自动保存：${state.articleSave.relativePath}`
+      ? `已自动保存：${state.articleSave.relativePath}${state.articleSave.logRelativePath ? `；日志：${state.articleSave.logRelativePath}` : ""}`
       : "生成后的文章会自动保存到 generated-articles/站点名/ 目录。";
   }
   updateActionStates();
@@ -4977,10 +5075,32 @@ async function refreshSelected() {
   }
 
   const project = readProject();
+  resetGenerationLog("生成 Prompt", item);
+  appendGenerationLog("Brief 请求开始", {
+    endpoint: "/api/workflow/brief",
+    briefStageProvider: state.aiStages.briefGeneration?.provider || "",
+    briefStageModel: state.aiStages.briefGeneration?.model || "",
+    usesExternalAi: !["local", ""].includes(String(state.aiStages.briefGeneration?.provider || "")) &&
+      state.aiStages.briefGeneration?.apiFormat !== "local",
+  });
   const briefData = await api("/api/workflow/brief", {
     keyword: item,
     project,
     aiStage: state.aiStages.briefGeneration,
+  });
+  appendGenerationLog("Brief 请求完成", {
+    source: briefData.briefSource || "local",
+    aiEnhanced: Boolean(briefData.aiEnhanced),
+    provider: briefData.aiMeta?.provider || "",
+    model: briefData.aiMeta?.model || "",
+    reason: briefData.aiMeta?.reason || "",
+    localBrief: briefData.localBrief || "",
+    finalBrief: briefData.brief || "",
+    rawBriefResponse: briefData,
+  });
+  appendGenerationLog("Prompt 请求开始", {
+    endpoint: "/api/workflow/prompt",
+    note: "当前 Prompt 模板由本地 workflow 生成；如果 Brief 已 AI 增强，Prompt 会使用增强后的 Brief。",
   });
   const promptData = await api("/api/workflow/prompt", {
     keyword: item,
@@ -4988,8 +5108,22 @@ async function refreshSelected() {
     briefOverride: briefData.brief || "",
     aiStage: state.aiStages.briefGeneration,
   });
+  appendGenerationLog("Prompt 请求完成", {
+    promptLength: String(promptData.prompt || "").length,
+    prompt: promptData.prompt || "",
+    rawPromptResponse: promptData,
+    note: "生成 Prompt 这一步本身不拉 SERP；SERP 会在生成文章前自动补充。",
+  });
 
   state.brief = briefData.brief || "";
+  state.briefInfo = {
+    source: briefData.briefSource || "local",
+    aiEnhanced: Boolean(briefData.aiEnhanced),
+    provider: briefData.aiMeta?.provider || "",
+    model: briefData.aiMeta?.model || "",
+    reason: briefData.aiMeta?.reason || "",
+    cached: Boolean(briefData.aiMeta?.cached),
+  };
   state.prompt = promptData.prompt || "";
   renderAll();
   saveWorkspaceDraft();
@@ -5111,6 +5245,55 @@ function articleGenerationProject() {
     targetSiteName: opportunity.siteName || opportunity.sourceLabel || "",
     targetSiteRole: opportunity.siteRole || "",
   };
+}
+
+function localeConflictForArticle(item = selectedItem()) {
+  const project = articleGenerationProject();
+  const targetLocale = project.locale || {};
+  const keywordLocale = item?.locale || {};
+  if (!item || !keywordLocale.configured || !targetLocale.configured) return null;
+
+  const keywordGl = String(keywordLocale.googleGl || "").toLowerCase();
+  const targetGl = String(targetLocale.googleGl || "").toLowerCase();
+  const keywordLang = String(keywordLocale.languageCode || keywordLocale.language || "").toLowerCase();
+  const targetLang = String(targetLocale.languageCode || targetLocale.language || "").toLowerCase();
+  const marketConflict = keywordGl && targetGl && keywordGl !== targetGl;
+  const languageConflict = keywordLang && targetLang && keywordLang !== "multi" && keywordLang !== targetLang;
+
+  if (!marketConflict && !languageConflict) return null;
+  return {
+    keywordMarket: keywordLocale.rawMarket || `${keywordLocale.market || ""} / ${keywordLocale.language || ""}`.trim(),
+    targetMarket: targetLocale.rawMarket || `${targetLocale.market || ""} / ${targetLocale.language || ""}`.trim(),
+    keywordGl,
+    targetGl,
+    keywordLanguage: keywordLocale.language || keywordLocale.languageCode || "",
+    targetLanguage: targetLocale.language || targetLocale.languageCode || "",
+  };
+}
+
+function assertArticleGenerationReady(item = selectedItem()) {
+  const conflict = localeConflictForArticle(item);
+  if (!conflict) return;
+  const message = [
+    "已拦截生成：关键词市场/语种与目标站点不一致。",
+    `关键词市场：${conflict.keywordMarket || "unknown"}（gl=${conflict.keywordGl || "-"} / language=${conflict.keywordLanguage || "-"}）`,
+    `目标生成市场：${conflict.targetMarket || "unknown"}（gl=${conflict.targetGl || "-"} / language=${conflict.targetLanguage || "-"}）`,
+    "请切换到匹配市场的站点，或重新导入/筛选同市场关键词后再生成。",
+  ].join("\n");
+  appendGenerationLog("生成前安全闸门拦截", conflict, "error");
+  throw new Error(message);
+}
+
+function extractArticleContentFromAiResponse(data = {}) {
+  const content = String(data.content || data.text || "").trim();
+  if (!content) {
+    const reason = data.error || data.status || "AI 没有返回可发布正文。";
+    throw new Error(`文章生成失败：${reason}`);
+  }
+  if (/^\s*[{[]/.test(content) && /"choices"\s*:|"object"\s*:\s*"chat\.completion"/.test(content.slice(0, 600))) {
+    throw new Error("文章生成失败：模型返回了原始 JSON，而不是 Markdown 正文。请检查模型/中转站是否只返回 reasoning_content。");
+  }
+  return content;
 }
 
 function articleSaveContextFor(item = {}) {
@@ -5244,19 +5427,49 @@ function opportunityPromptContext(item = selectedItem()) {
 }
 
 async function ensureArticlePrompt(item) {
+  appendGenerationLog("文章 Prompt 准备开始", {
+    keyword: item?.keyword || "",
+    hasExistingPrompt: Boolean(($("promptOutput").value || state.prompt || "").trim()),
+  });
   await ensureSerpForArticle(item);
   const currentPrompt = $("promptOutput").value || state.prompt || "";
   if (promptHasArticleFormat(currentPrompt) && promptHasLocaleGuardrail(currentPrompt)) {
+    appendGenerationLog("复用当前 Prompt", {
+      reason: "当前 Prompt 已包含文章格式规范和 Locale Guardrail。",
+    });
     state.prompt = stripRuntimePromptContext(currentPrompt);
     const context = opportunityPromptContext(item);
-    if (context) state.prompt = `${state.prompt}\n\n${context}`.trim();
+    if (context) {
+      state.prompt = `${state.prompt}\n\n${context}`.trim();
+      appendGenerationLog("追加内容中枢上下文", {
+        hasActiveOpportunity: true,
+        sourceSite: state.contentHub.activeOpportunity?.sourceLabel || "",
+        internalLinks: state.contentHub.activeOpportunity?.internalLinks?.length || 0,
+        contentHubPromptContext: context,
+      });
+    }
     const serpContext = serpPromptContext(item);
-    if (serpContext) state.prompt = `${state.prompt}\n\n${serpContext}`.trim();
+    if (serpContext) {
+      state.prompt = `${state.prompt}\n\n${serpContext}`.trim();
+      appendGenerationLog("追加 SERP 上下文到 Prompt", {
+        hasRealSerp: serpMatchesItem(item, articleGenerationProject().locale || {}),
+        organicResults: state.serpData?.organicResults?.length || 0,
+        serpPromptContext: serpContext,
+      });
+    }
     $("promptOutput").value = state.prompt;
+    appendGenerationLog("文章 Prompt 准备完成", {
+      finalPromptLength: state.prompt.length,
+      finalPrompt: state.prompt,
+    });
     return;
   }
 
   try {
+    appendGenerationLog("重新请求本地 Prompt 模板", {
+      endpoint: "/api/workflow/prompt",
+      reason: "当前 Prompt 缺少文章格式规范或 Locale Guardrail。",
+    });
     const promptData = await api("/api/workflow/prompt", {
       keyword: item,
       project: articleGenerationProject(),
@@ -5265,22 +5478,50 @@ async function ensureArticlePrompt(item) {
     });
     state.brief = promptData.brief || state.brief;
     state.prompt = promptData.prompt || currentPrompt;
+    appendGenerationLog("本地 Prompt 模板请求完成", {
+      promptLength: String(state.prompt || "").length,
+      prompt: state.prompt || "",
+      rawPromptResponse: promptData,
+    });
   } catch {
     state.prompt = currentPrompt;
+    appendGenerationLog("本地 Prompt 模板请求失败，沿用当前 Prompt", {}, "warn");
   }
 
   state.prompt = stripRuntimePromptContext(state.prompt);
 
   if (!promptHasArticleFormat(state.prompt) || !promptHasLocaleGuardrail(state.prompt)) {
     state.prompt = `${state.prompt || ""}\n${requiredArticleFormatPrompt()}`.trim();
+    appendGenerationLog("补充强制格式与 Locale 规范", {
+      reason: "Prompt 缺少 WordPress 导入格式或 Locale Guardrail。",
+    });
   }
 
   const context = opportunityPromptContext(item);
-  if (context) state.prompt = `${state.prompt}\n\n${context}`.trim();
+  if (context) {
+    state.prompt = `${state.prompt}\n\n${context}`.trim();
+    appendGenerationLog("追加内容中枢上下文", {
+      hasActiveOpportunity: true,
+      sourceSite: state.contentHub.activeOpportunity?.sourceLabel || "",
+      internalLinks: state.contentHub.activeOpportunity?.internalLinks?.length || 0,
+      contentHubPromptContext: context,
+    });
+  }
   const serpContext = serpPromptContext(item);
-  if (serpContext) state.prompt = `${state.prompt}\n\n${serpContext}`.trim();
+  if (serpContext) {
+    state.prompt = `${state.prompt}\n\n${serpContext}`.trim();
+    appendGenerationLog("追加 SERP 上下文到 Prompt", {
+      hasRealSerp: serpMatchesItem(item, articleGenerationProject().locale || {}),
+      organicResults: state.serpData?.organicResults?.length || 0,
+      serpPromptContext: serpContext,
+    });
+  }
 
   $("promptOutput").value = state.prompt;
+  appendGenerationLog("文章 Prompt 准备完成", {
+    finalPromptLength: state.prompt.length,
+    finalPrompt: state.prompt,
+  });
 }
 
 async function saveGeneratedArticleToServer(item, options = {}) {
@@ -5288,6 +5529,12 @@ async function saveGeneratedArticleToServer(item, options = {}) {
 
   const saveContext = articleSaveContextFor(item);
   const parts = state.articleParts || splitArticleForWp(state.article);
+  appendGenerationLog("保存 Markdown 和日志文件开始", {
+    endpoint: "/api/articles/save",
+    siteName: articleSiteNameFor(saveContext),
+    slug: parts.slug || slugify(saveContext.keyword || "seo-article"),
+    batchId: options.batchId || "",
+  });
   const data = await api("/api/articles/save", {
     content: state.article,
     slug: parts.slug || slugify(saveContext.keyword || "seo-article"),
@@ -5295,11 +5542,17 @@ async function saveGeneratedArticleToServer(item, options = {}) {
     keyword: saveContext,
     project: articleGenerationProject(),
     batchId: options.batchId || "",
+    generationLog: state.generationLog || [],
+    generationRunId: state.generationRunId || "",
   });
 
   state.articleSave = data;
+  appendGenerationLog("保存 Markdown 和日志文件完成", {
+    articlePath: data.relativePath || "",
+    logPath: data.logRelativePath || "",
+  });
   if ($("articleSaveStatus")) {
-    $("articleSaveStatus").textContent = `已自动保存：${data.relativePath}`;
+    $("articleSaveStatus").textContent = `已自动保存：${data.relativePath}${data.logRelativePath ? `；日志：${data.logRelativePath}` : ""}`;
   }
   return data;
 }
@@ -5342,30 +5595,57 @@ async function generateArticle(options = {}) {
   const item = selectedItem();
   if (!item) return;
 
+  resetGenerationLog("生成文章", item);
+  assertArticleGenerationReady(item);
   state.articleSave = null;
   await ensureArticlePrompt(item);
   const stageKey = $("articleStageInput").value;
   const stage = state.aiStages[stageKey] || state.aiStages.articleGeneration;
+  appendGenerationLog("文章生成阶段确认", {
+    stageKey,
+    label: stage.label || "",
+    provider: stage.provider || "",
+    model: stage.model || "",
+    apiFormat: stage.apiFormat || "",
+    endpoint: stage.endpoint || "/api/generate",
+    isLocalMock: stage.provider === "local" || stage.apiFormat === "local",
+  });
 
   if (stage.provider === "local" || stage.apiFormat === "local") {
+    appendGenerationLog("使用 Local/Mock 生成文章", {
+      endpoint: "/api/workflow/mock-article",
+      note: "不会调用外部 AI；即使 Prompt 里有 SERP，上游 mock 文章也不会真正消化 SERP。",
+    }, "warn");
     const data = await api("/api/workflow/mock-article", {
       keyword: item,
       project: articleGenerationProject(),
       aiStage: stage,
     });
     state.article = data.content || "";
+    appendGenerationLog("Local/Mock 文章生成完成", {
+      articleLength: state.article.length,
+      rawMockResponse: data,
+    });
     renderGeneration();
     try {
       const saveData = await saveGeneratedArticleToServer(item, options);
       rememberGeneratedArticle(item, saveData, options);
       saveWorkspaceDraft("文章草稿已自动保存到本机浏览器和本地 Markdown 目录。");
     } catch (error) {
+      appendGenerationLog("保存失败", { message: error.message }, "error");
       $("articleSaveStatus").textContent = `文章已生成，但保存到本地目录失败：${error.message}`;
       saveWorkspaceDraft("文章草稿已自动保存到本机浏览器；本地 Markdown 保存失败。");
     }
     return;
   }
 
+  appendGenerationLog("外部 AI 文章生成请求开始", {
+    endpoint: stage.endpoint || "/api/generate",
+    provider: stage.provider,
+    model: stage.model,
+    promptLength: state.prompt.length,
+    prompt: state.prompt,
+  });
   setArticleOutput(`正在请求 ${stage.label} 阶段 AI：${stage.provider} / ${stage.model}`);
   const response = await fetch(stage.endpoint || "/api/generate", {
     method: "POST",
@@ -5383,13 +5663,25 @@ async function generateArticle(options = {}) {
 
   if (!response.ok) throw new Error(`API returned ${response.status}`);
   const data = await response.json();
-  state.article = data.content || data.text || JSON.stringify(data, null, 2);
+  appendGenerationLog("外部 AI 文章生成请求完成", {
+    configured: data.configured,
+    status: data.status || null,
+    error: data.error || "",
+    provider: data.provider || stage.provider || "",
+    model: data.model || stage.model || "",
+    rawAiResponse: data,
+  });
+  state.article = extractArticleContentFromAiResponse(data);
+  appendGenerationLog("外部 AI 正文校验通过", {
+    articleLength: state.article.length,
+  });
   renderGeneration();
   try {
     const saveData = await saveGeneratedArticleToServer(item, options);
     rememberGeneratedArticle(item, saveData, options);
     saveWorkspaceDraft("文章草稿已自动保存到本机浏览器和本地 Markdown 目录。");
   } catch (error) {
+    appendGenerationLog("保存失败", { message: error.message }, "error");
     $("articleSaveStatus").textContent = `文章已生成，但保存到本地目录失败：${error.message}`;
     saveWorkspaceDraft("文章草稿已自动保存到本机浏览器；本地 Markdown 保存失败。");
   }
