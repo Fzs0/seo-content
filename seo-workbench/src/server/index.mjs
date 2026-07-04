@@ -13,6 +13,7 @@ import { handleImagesRoute } from "./routes/images.mjs";
 
 import { handleMainSitesRoute } from "./routes/main-sites.mjs";
 import { handleProductsRoute } from "./routes/products.mjs";
+import { handleSerpApiRoute } from "./routes/serpapi.mjs";
 import { handleSiteSnapshotRoute } from "./routes/site-snapshot.mjs";
 import { handleTodosRoute } from "./routes/todos.mjs";
 import { handleWorkflowRoute } from "./routes/workflow.mjs";
@@ -25,6 +26,7 @@ const appRoutePaths = new Set([
   "/page-setup",
   "/page-keywords",
   "/page-intelligence",
+  "/page-global-brain",
   "/page-review",
   "/page-production",
   "/page-publishing",
@@ -170,6 +172,11 @@ export function createSeoWorkbenchServer() {
 
       if (url.pathname.startsWith("/api/products")) {
         await handleProductsRoute(request, response, url.pathname);
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/serpapi")) {
+        await handleSerpApiRoute(request, response, url.pathname);
         return;
       }
 

@@ -121,6 +121,8 @@ const state = {
   googleReviewCache: {},
   imageConfig: null,
   productAssets: null,
+  serpApiConfig: null,
+  serpData: null,
   activePage: "setup",
   contentHub: {
     source: "blog",
@@ -146,6 +148,12 @@ const state = {
     autoPublish: true,
     log: "",
     lastRunAt: "",
+  globalBrain: {
+    selectedMarket: "__project__",
+    requireMarketIsolation: true,
+    includeSerp: false,
+    postsBySite: {},
+    lastTaskRows: [],
   },
   todos: [],
 };
@@ -163,6 +171,7 @@ const PAGE_CONFIG = {
   setup: ["project", "standard", "ai-stages"],
   keywords: ["keywords", "allocation"],
   intelligence: ["content-hub"],
+  globalBrain: ["global-brain"],
   review: ["review-data"],
   production: ["brief", "generation"],
   publishing: ["exports"],
@@ -174,6 +183,7 @@ const PAGE_ROUTES = {
   "/page-setup": "setup",
   "/page-keywords": "keywords",
   "/page-intelligence": "intelligence",
+  "/page-global-brain": "globalBrain",
   "/page-review": "review",
   "/page-production": "production",
   "/page-publishing": "publishing",
@@ -445,6 +455,158 @@ async function testImageSearch() {
     : `没有搜到图片：${(data.errors || []).join("；") || "无结果"}`;
 }
 
+function serpQueryForCurrentKeyword() {
+  return $("serpTestQueryInput")?.value.trim() || selectedItem()?.keyword || state.contentHub.activeOpportunity?.keyword || "";
+}
+
+function renderSerpApiConfig() {
+  const config = state.serpApiConfig || {};
+  if ($("serpApiStatus")) {
+    $("serpApiStatus").textContent = config.enabled
+      ? `SerpApi 已配置：${config.source || "local"} ${config.keyPreview || ""}。测试会使用当前市场 gl/hl。`
+      : "SerpApi 尚未配置。请填入 private API key 后保存。";
+  }
+  if ($("serpDataOutput")) {
+    const serp = state.serpData;
+    $("serpDataOutput").textContent = serp
+      ? JSON.stringify({
+          query: serp.query,
+          gl: serp.gl,
+          hl: serp.hl,
+          requestedAt: serp.requestedAt,
+          organicTop10: (serp.organicResults || []).slice(0, 10).map((item) => ({
+            position: item.position,
+            title: item.title,
+            link: item.link,
+            snippet: item.snippet,
+          })),
+          relatedQuestions: serp.relatedQuestions || [],
+          relatedSearches: serp.relatedSearches || [],
+          rawFeatureKeys: serp.rawFeatureKeys || [],
+        }, null, 2)
+      : "还没有 SERP 数据。保存 SerpApi 后，可测试当前关键词。";
+  }
+}
+
+async function loadSerpApiConfig() {
+  state.serpApiConfig = await api("/api/serpapi/config");
+  renderSerpApiConfig();
+  renderGlobalBrain();
+}
+
+async function saveSerpApiConfig() {
+  $("serpApiStatus").textContent = "正在保存 SerpApi 配置...";
+  const data = await api("/api/serpapi/config", {
+    config: {
+      apiKey: $("serpApiKeyInput").value.trim(),
+      defaultEngine: "google",
+      clearApiKey: $("clearSerpApiKeyInput").checked,
+    },
+  });
+  state.serpApiConfig = data;
+  $("serpApiKeyInput").value = "";
+  $("clearSerpApiKeyInput").checked = false;
+  renderSerpApiConfig();
+  $("serpApiStatus").textContent = data.enabled
+    ? `SerpApi 配置已保存：${data.source || "local"} ${data.keyPreview || ""}。现在可以拉取当前关键词 SERP。`
+    : "SerpApi Key 已清除或尚未配置。";
+  updateActionStates();
+}
+
+async function testSerpApiSearch() {
+  const query = serpQueryForCurrentKeyword();
+  if (!query) {
+    $("serpTestQueryInput").focus();
+    $("serpApiStatus").textContent = "请先填写测试关键词，或在关键词表中选择一个关键词。";
+    return;
+  }
+
+  const locale = selectedGlobalBrainLocale();
+  $("serpApiStatus").textContent = `正在拉取 SERP：${query}（gl=${locale.googleGl || "-"} / hl=${locale.googleHl || "-"}）`;
+  const data = await api("/api/serpapi/search", {
+    query,
+    locale,
+    num: 10,
+  });
+  state.serpData = data;
+  renderSerpApiConfig();
+  renderGlobalBrain();
+  saveWorkspaceDraft(`已缓存 SERP：${data.query} / gl=${data.gl || "-"} / hl=${data.hl || "-"}。`);
+  $("serpApiStatus").textContent = `SERP 拉取成功：${data.query}，自然结果 ${data.organicResults?.length || 0} 条，PAA ${data.relatedQuestions?.length || 0} 条。`;
+}
+
+function serpMatchesItem(item = selectedItem(), locale = articleGenerationProject().locale || {}) {
+  if (!item || !state.serpData?.query) return false;
+  const sameKeyword = normalizeSearchText(state.serpData.query) === normalizeSearchText(item.keyword);
+  const sameGl = !locale.googleGl || !state.serpData.gl || String(locale.googleGl).toLowerCase() === String(state.serpData.gl).toLowerCase();
+  const sameHl = !locale.googleHl || !state.serpData.hl || String(locale.googleHl).toLowerCase() === String(state.serpData.hl).toLowerCase();
+  return sameKeyword && sameGl && sameHl;
+}
+
+async function ensureSerpForArticle(item = selectedItem()) {
+  const project = articleGenerationProject();
+  const locale = project.locale || {};
+  if (!item?.keyword || !state.serpApiConfig?.enabled) return null;
+  if (serpMatchesItem(item, locale)) return state.serpData;
+
+  const statusTarget = $("serpApiStatus") || $("articleSaveStatus") || $("contentHubStatus");
+  if (statusTarget) {
+    statusTarget.textContent = `正在为文章生成拉取 SERP：${item.keyword}（gl=${locale.googleGl || "-"} / hl=${locale.googleHl || "-"}）`;
+  }
+  const data = await api("/api/serpapi/search", {
+    query: item.keyword,
+    locale,
+    num: 10,
+  });
+  state.serpData = data;
+  renderSerpApiConfig();
+  renderGlobalBrain();
+  return data;
+}
+
+function serpPromptContext(item = selectedItem()) {
+  const project = articleGenerationProject();
+  const locale = project.locale || {};
+  if (!serpMatchesItem(item, locale)) {
+    return [
+      "## Real SERP Data",
+      "No real SerpApi result is available for this exact keyword and locale. Do not claim Google top 10 was checked.",
+    ].join("\n");
+  }
+
+  const serp = state.serpData || {};
+  const organic = (serp.organicResults || []).slice(0, 10).map((result) =>
+    `${result.position || ""}. ${result.title || "Untitled"} -> ${result.link || ""}\n   Snippet: ${result.snippet || ""}`,
+  );
+  const questions = (serp.relatedQuestions || []).slice(0, 8).map((question, index) =>
+    `${index + 1}. ${question.question || question.title || ""}`,
+  );
+  const related = (serp.relatedSearches || []).slice(0, 10).map((query, index) => `${index + 1}. ${query}`);
+
+  return [
+    "## Real SERP Data",
+    `Source: SerpApi Google Search API`,
+    `Query: ${serp.query || item?.keyword || ""}`,
+    `Locale: gl=${serp.gl || locale.googleGl || "not-set"} / hl=${serp.hl || locale.googleHl || "not-set"}`,
+    `Fetched at: ${serp.requestedAt || ""}`,
+    "",
+    "Top organic results:",
+    organic.length ? organic.join("\n") : "No organic results returned.",
+    "",
+    "People Also Ask / related questions:",
+    questions.length ? questions.join("\n") : "No related questions returned.",
+    "",
+    "Related searches:",
+    related.length ? related.join("\n") : "No related searches returned.",
+    "",
+    "SERP analysis requirements:",
+    "- Infer search intent and page type from the real top 10 above.",
+    "- If top results are mostly product/category pages, do not force a blog article; explain in Evidence Needed or Content QA Checklist.",
+    "- Identify missing angles, headings, FAQs, examples, and trust signals based on competitor titles/snippets.",
+    "- Do not copy competitor wording. Use SERP only for intent, structure, and gap analysis.",
+  ].join("\n");
+}
+
 function requestId(prefix = "req") {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -642,7 +804,7 @@ function localeStatusTextSafe(locale) {
     `Content language: ${locale.language || "not-set"}`,
     `Google SERP params: gl=${locale.googleGl || "not-set"} / hl=${locale.googleHl || "not-set"}`,
     `Semrush database should match: ${locale.semrushDatabase || "split-by-market"}`,
-    "SERP auto-fetch: not connected. Current workflow only marks needsSerpCheck unless a SERP API is added.",
+    "SERP validation must use cached SerpApi results for this exact locale. Do not claim SERP was checked without real SerpApi data.",
     locale.warning ? `Warning: ${locale.warning}` : "",
   ]
     .filter(Boolean)
@@ -730,9 +892,11 @@ function saveWorkspaceDraft(message = "") {
       activePage: state.activePage,
       contentHub: serializableContentHubDraft(),
       bulkPublish: state.bulkPublish,
+      globalBrain: state.globalBrain,
       selectedGoogleDataSourceId: state.selectedGoogleDataSourceId,
       googleReviewData: state.googleReviewData,
       googleReviewCache: serializableGoogleReviewCache(),
+      serpData: state.serpData,
     };
     localStorage.setItem(WORKSPACE_DRAFT_KEY, JSON.stringify(draft));
     if ($("projectSaveStatus")) {
@@ -772,9 +936,14 @@ function restoreWorkspaceDraft() {
     state.articleParts = splitArticleForWp(state.article);
     state.articleSave = draft.articleSave || null;
     state.activePage = draft.activePage || state.activePage;
+    state.globalBrain = {
+      ...state.globalBrain,
+      ...(draft.globalBrain && typeof draft.globalBrain === "object" ? draft.globalBrain : {}),
+    };
     state.selectedGoogleDataSourceId = draft.selectedGoogleDataSourceId || "";
     state.googleReviewCache = draft.googleReviewCache && typeof draft.googleReviewCache === "object" ? draft.googleReviewCache : {};
     state.googleReviewData = draft.googleReviewData || state.googleReviewCache[state.selectedGoogleDataSourceId]?.data || null;
+    state.serpData = draft.serpData || null;
     if (draft.contentHub && typeof draft.contentHub === "object") {
       state.contentHub = {
         ...state.contentHub,
@@ -3652,6 +3821,8 @@ function updateActionStates() {
   setActionEnabled("exportCsvBtn", hasKeywords, "先导入关键词后再导出。");
   setActionEnabled("exportCalendarBtn", hasKeywords, "先导入关键词，系统才有内容日历可导出。");
   setActionEnabled("downloadStandardBtn", Boolean(state.standard), "SEO 标准还没有载入。");
+  setActionEnabled("saveSerpApiConfigBtn", true);
+  setActionEnabled("testSerpApiBtn", Boolean(state.serpApiConfig?.enabled), "先保存 SerpApi API Key。");
 
   setActionEnabled("copyBriefBtn", hasBrief, "先在关键词池选择一个关键词生成 Brief。");
   setActionEnabled("buildPromptBtn", hasSelectedKeyword, "先在关键词池或内容中枢选择一个关键词。");
@@ -4161,6 +4332,446 @@ async function testGoogleDataSource() {
   $("googleDataStatus").textContent = `连接成功：${(data.checks || []).map((check) => `${check.type} ${check.rows} 行样例`).join("；") || "已完成鉴权"}。`;
 }
 
+function uniquePostsForGlobalBrain(sites = null) {
+  const seen = new Set();
+  const allowedSiteKeys = Array.isArray(sites) && sites.length ? new Set(sites.map((site) => site.key)) : null;
+  const globalPosts = Object.values(state.globalBrain.postsBySite || {})
+    .filter((entry) => !allowedSiteKeys || allowedSiteKeys.has(entry.siteKey))
+    .flatMap((entry) => entry.posts || []);
+  return [...globalPosts, ...(state.mainPosts || []), ...(state.blogPosts || []), ...(state.wpPosts || []), ...(state.contentHub.posts || [])]
+    .filter((post) => {
+      const key = `${post.siteKey || post.source || ""}:${post.id || post.slug || post.link || post.url || post.title}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function compactGlobalPost(post = {}, site = {}) {
+  return {
+    id: post.id || post.slug || post.handle || post.url || post.link || post.title || "",
+    title: post.title || post.name || post.slug || "Untitled",
+    slug: post.slug || post.handle || "",
+    url: post.url || post.link || post.permalink || "",
+    status: post.status || "",
+    publishedAt: post.publishedAt || post.published_at || post.date || post.modified || "",
+    siteKey: site.key || "",
+    siteName: site.name || "",
+    siteType: site.type || "",
+  };
+}
+
+async function fetchPostsForGlobalSite(site = {}) {
+  if (site.type === "wp") {
+    const data = await api("/api/wp-sites/posts", {
+      siteId: site.id,
+      perPage: 100,
+      maxPages: 20,
+      includeContent: false,
+    });
+    return (data.posts || []).map((post) => compactGlobalPost(post, site));
+  }
+
+  if (site.type === "blog") {
+    const data = await api("/api/blog-sites/list", { siteId: site.id });
+    return (data.posts || []).map((post) => compactGlobalPost(post, site));
+  }
+
+  if (site.type === "main") {
+    const data = await api("/api/main-sites/list", {
+      siteId: site.id,
+      pageSize: 100,
+      maxPages: 20,
+      force: true,
+      source: "global-brain-refresh-button",
+      requestId: requestId("global-brain-main-list"),
+    });
+    return (data.posts || []).map((post) => compactGlobalPost(post, site));
+  }
+
+  return [];
+}
+
+async function refreshGlobalBrainPostInventory() {
+  const snapshot = globalBrainSnapshot();
+  const sites = snapshot.sites || [];
+  if (!sites.length) {
+    $("globalBrainStatus").textContent = "当前市场没有匹配站点。请先配置站点市场/语种，或切换分析市场。";
+    return;
+  }
+
+  $("globalBrainStatus").textContent = `正在读取当前市场 ${sites.length} 个站点的文章列表...`;
+  const logs = [];
+  const nextCache = { ...(state.globalBrain.postsBySite || {}) };
+
+  for (const site of sites) {
+    try {
+      const posts = await fetchPostsForGlobalSite(site);
+      nextCache[site.key] = {
+        siteKey: site.key,
+        siteName: site.name || site.key,
+        siteType: site.type,
+        loadedAt: new Date().toISOString(),
+        count: posts.length,
+        posts,
+      };
+      logs.push(`${site.name || site.key}: ${posts.length} 篇`);
+    } catch (error) {
+      nextCache[site.key] = {
+        siteKey: site.key,
+        siteName: site.name || site.key,
+        siteType: site.type,
+        loadedAt: new Date().toISOString(),
+        count: 0,
+        posts: [],
+        error: error.message,
+      };
+      logs.push(`${site.name || site.key}: 读取失败 - ${error.message}`);
+    }
+    state.globalBrain.postsBySite = nextCache;
+    renderGlobalBrain();
+  }
+
+  const total = uniquePostsForGlobalBrain(sites).length;
+  $("globalBrainStatus").textContent = `文章库存刷新完成：${total} 篇已缓存。${logs.join("；")}`;
+  saveWorkspaceDraft("全局大脑文章库存已刷新。");
+}
+
+const GLOBAL_BRAIN_MARKET_PRESETS = [
+  "US / English",
+  "UK / English",
+  "CA / English",
+  "AU / English",
+  "DE / German",
+  "FR / French",
+  "JP / Japanese",
+  "Global / English",
+];
+
+function globalBrainMarketLabel(value = "") {
+  if (value === "__project__") return "当前项目市场";
+  if (value === "__all__") return "全部市场（只做总览，不做生产决策）";
+  return value || "当前项目市场";
+}
+
+function globalBrainMarketOptions() {
+  const options = new Set(["__project__", "__all__"]);
+  const projectMarket = readProject().market;
+  if (projectMarket) options.add(projectMarket);
+  for (const site of allContentSiteOptions()) {
+    const profile = site.profile || inferSiteProfile(site);
+    if (profile.targetMarket) options.add(profile.targetMarket);
+    else if (profile.targetLanguage) options.add(`Global / ${profile.targetLanguage}`);
+  }
+  for (const keyword of state.keywords || []) {
+    if (keyword.locale?.rawMarket) options.add(keyword.locale.rawMarket);
+  }
+  GLOBAL_BRAIN_MARKET_PRESETS.forEach((item) => options.add(item));
+  return [...options];
+}
+
+function selectedGlobalBrainMarket() {
+  const selected = $("globalBrainMarketInput")?.value || state.globalBrain.selectedMarket || "__project__";
+  if (selected === "__project__") return readProject().market || "";
+  if (selected === "__all__") return "";
+  return selected;
+}
+
+function selectedGlobalBrainLocale() {
+  return resolveSeoLocale(selectedGlobalBrainMarket());
+}
+
+function renderGlobalBrainControls() {
+  const select = $("globalBrainMarketInput");
+  if (!select) return;
+  const current = state.globalBrain.selectedMarket || "__project__";
+  const options = globalBrainMarketOptions();
+  if (!options.includes(current)) options.unshift(current);
+  select.innerHTML = options
+    .map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(globalBrainMarketLabel(value))}</option>`)
+    .join("");
+  select.value = current;
+  if ($("globalBrainMarketIsolationInput")) {
+    $("globalBrainMarketIsolationInput").checked = state.globalBrain.requireMarketIsolation !== false;
+  }
+}
+
+function localeMatchesScope(locale = {}, scopeLocale = {}, allowUnknown = true) {
+  if (!scopeLocale?.configured) return true;
+  if (!locale?.configured) return allowUnknown;
+  const scopeGl = String(scopeLocale.googleGl || "").toLowerCase();
+  const itemGl = String(locale.googleGl || "").toLowerCase();
+  const scopeLang = String(scopeLocale.languageCode || scopeLocale.language || "").toLowerCase();
+  const itemLang = String(locale.languageCode || locale.language || "").toLowerCase();
+  const marketOk = !scopeGl || !itemGl || scopeGl === itemGl;
+  const languageOk = !scopeLang || !itemLang || itemLang === "multi" || scopeLang === itemLang;
+  return marketOk && languageOk;
+}
+
+function siteMatchesGlobalBrainScope(site = {}, scopeLocale = selectedGlobalBrainLocale()) {
+  if (!state.globalBrain.requireMarketIsolation || !scopeLocale?.configured) return true;
+  const profile = site.profile || inferSiteProfile(site);
+  return localeMatchesScope(profile.locale || {}, scopeLocale, false);
+}
+
+function keywordMatchesGlobalBrainScope(item = {}, scopeLocale = selectedGlobalBrainLocale()) {
+  if (!state.globalBrain.requireMarketIsolation || !scopeLocale?.configured) return true;
+  const database = String(item.database || "").trim().toLowerCase();
+  const expectedDatabase = String(scopeLocale.semrushDatabase || "").trim().toLowerCase();
+  if (database && expectedDatabase) return database === expectedDatabase;
+  return localeMatchesScope(item.locale || {}, scopeLocale, true);
+}
+
+function opportunityMatchesGlobalBrainScope(item = {}, scopeLocale = selectedGlobalBrainLocale()) {
+  const sourceKeyword =
+    state.keywords.find((keyword) => keyword.id === item.sourceKeywordId) ||
+    state.keywords.find((keyword) => normalizeSearchText(keyword.keyword) === normalizeSearchText(item.keyword));
+  return keywordMatchesGlobalBrainScope(sourceKeyword || item, scopeLocale);
+}
+
+function globalBrainSnapshot() {
+  renderGlobalBrainControls();
+  const scopeValue = state.globalBrain.selectedMarket || "__project__";
+  const scopeMarket = selectedGlobalBrainMarket();
+  const scopeLocale = selectedGlobalBrainLocale();
+  const allSites = allContentSiteOptions();
+  const sites = scopeValue === "__all__" ? allSites : allSites.filter((site) => siteMatchesGlobalBrainScope(site, scopeLocale));
+  const incompatibleSites = allSites.filter((site) => !siteMatchesGlobalBrainScope(site, scopeLocale));
+  const products = state.productAssets?.products || [];
+  const posts = uniquePostsForGlobalBrain(sites);
+  const keywords = scopeValue === "__all__" ? state.keywords : state.keywords.filter((item) => keywordMatchesGlobalBrainScope(item, scopeLocale));
+  const opportunities =
+    scopeValue === "__all__"
+      ? state.contentHub.opportunities || []
+      : (state.contentHub.opportunities || []).filter((item) => opportunityMatchesGlobalBrainScope(item, scopeLocale));
+  return {
+    scopeValue,
+    scopeMarket,
+    scopeLocale,
+    allSites,
+    sites,
+    incompatibleSites,
+    products,
+    posts,
+    keywords,
+    opportunities,
+    review: state.googleReviewData || null,
+    hasSerpData: Boolean(state.serpData?.organicResults?.length),
+  };
+}
+
+function globalBrainTasks({ sites = [], incompatibleSites = [], products = [], posts = [], keywords = [], opportunities = [], scopeLocale = {}, hasSerpData = false } = {}) {
+  const tasks = [];
+  const project = readProject();
+  const unprofiledSites = sites.filter((site) => !site.profile?.targetMarket && !site.profile?.targetLanguage);
+  const p0Keywords = keywords.filter((item) => item.priority === "P0");
+  const newArticleOpps = opportunities.filter((item) => /新写|create|article/i.test(item.action || "")).slice(0, 6);
+
+  if (!project.market) tasks.push(["P0", "补齐项目目标市场", "没有目标市场时，语言、Semrush 数据库和 Google SERP gl/hl 都无法稳定。"]);
+  if (state.globalBrain.selectedMarket === "__all__") tasks.push(["P0", "先切到单一市场再生产内容", "全部市场只适合看资产总览，不能直接进入关键词规划或文章生成。"]);
+  if (scopeLocale?.configured && !scopeLocale.semrushDatabase) tasks.push(["P0", "拆分多国家或多语种关键词池", "EU / Global 不是一个可执行 SERP 市场，需要按国家和语言拆开。"]);
+  if (!products.length) tasks.push(["P0", "提取主站产品资产", "主站负责商业承接，产品/集合页资产缺失会让文章无法判断应该承接到哪里。"]);
+  if (!keywords.length) tasks.push(["P0", "导入或切换到匹配当前市场的 Semrush 关键词池", "全局大脑需要同市场关键词池来判断新写、更新、暂不做。"]);
+  if (!state.googleReviewData) tasks.push(["P1", "拉取 GSC / GA4 复盘数据", "没有表现数据时，只能做规划，不能判断文章和站点真实效果。"]);
+  if (unprofiledSites.length) tasks.push(["P1", `补齐 ${unprofiledSites.length} 个站点档案`, "每个站点需要市场、语言和内容角色，否则站群分词会混乱。"]);
+  if (incompatibleSites.length) tasks.push(["P1", `处理 ${incompatibleSites.length} 个市场/语言不匹配站点`, "不匹配站点应隐藏、修正市场，或单独导入对应国家关键词。"]);
+  if (!opportunities.length && keywords.length && sites.length) tasks.push(["P1", "为目标站点生成内容机会池", "需要把已有文章和关键词池合并，判断哪些词未覆盖、哪些旧文该更新。"]);
+  if (newArticleOpps.length) tasks.push(["P0", `优先生产 ${newArticleOpps.length} 个新文章机会`, newArticleOpps.map((item) => item.keyword).join(" / ")]);
+  if (posts.length && p0Keywords.length && !opportunities.length) tasks.push(["P2", "用现有文章反查 P0 关键词覆盖", "已有文章库已经存在，但还没有转成全局机会池和更新任务。"]);
+  if (!hasSerpData) tasks.push(["P0", "接入真实 SERP 校验", "这是从工作台升级成 Agent 的关键：判断写文章、做集合页还是暂不做，需要真实 SERP 前 10。"]);
+
+  return tasks;
+}
+
+function renderGlobalBrain() {
+  const container = $("globalBrainResults");
+  if (!container) return;
+  const snapshot = globalBrainSnapshot();
+  const { sites, incompatibleSites, products, posts, keywords, opportunities, review, scopeLocale, hasSerpData } = snapshot;
+  const p0p1 = keywords.filter((item) => item.priority === "P0" || item.priority === "P1").length;
+  const mainKeywords = keywords.filter((item) => String(item.assignedSite || "").startsWith("主站")).length;
+  const blogKeywords = keywords.filter((item) => String(item.assignedSite || "").startsWith("博客")).length;
+  const tasks = globalBrainTasks({ sites, incompatibleSites, products, posts, keywords, opportunities, scopeLocale, hasSerpData });
+  const siteRows = sites.map((site) => {
+    const profile = site.profile || inferSiteProfile(site);
+    return [
+      site.name || site.key,
+      site.type === "main" ? "主站" : site.type === "wp" ? "WordPress" : "自建博客",
+      profile.contentRole || "未配置",
+      `${profile.targetMarket || "未配置"} / ${profile.targetLanguage || "未配置"}`,
+      site.compatible ? "匹配" : `不匹配：${site.incompatibleReason || ""}`,
+    ];
+  });
+  const taskRows = tasks.map((task) => [task[0], task[1], task[2]]);
+  const opportunityRows = opportunities.slice(0, 8).map((item) => [
+    item.keyword,
+    item.siteName || item.assignedSite || "",
+    item.action || "",
+    item.priority || "",
+    item.score || 0,
+  ]);
+  const dataRows = [
+    ["关键词池", keywords.length ? "READY" : "MISSING", `${keywords.length} 个匹配当前市场；Semrush DB 应为 ${scopeLocale.semrushDatabase || "待拆分"}`],
+    ["站点文章库", posts.length ? "READY" : "MISSING", `${posts.length} 篇已缓存文章；点击“按当前市场刷新看板”可手动读取匹配站点`],
+    ["产品资产", products.length ? "READY" : "MISSING", `${products.length} 个产品/商业承接资产`],
+    ["GSC / GA4", review ? "READY" : "MISSING", review ? "已缓存复盘数据，刷新页面不会丢" : "需要手动拉取真实表现数据"],
+    ["SERP Top 10", hasSerpData ? "READY" : "WAITING", hasSerpData ? `${state.serpData.query || ""} / gl=${state.serpData.gl || "-"} / hl=${state.serpData.hl || "-"}` : "保存 SerpApi 后，拉取当前关键词用于最终页面类型校验"],
+  ];
+  const postCacheRows = sites.map((site) => {
+    const entry = state.globalBrain.postsBySite?.[site.key] || {};
+    return [
+      site.name || site.key,
+      site.type === "main" ? "主站" : site.type === "wp" ? "WordPress" : "自建博客",
+      entry.loadedAt ? `${entry.count || 0} 篇` : "未读取",
+      entry.error || entry.loadedAt || "点击刷新看板读取",
+    ];
+  });
+  const flowRows = [
+    ["1", "刷新真实数据", "手动拉取产品、文章、GSC/GA4，不在页面打开时自动扫接口"],
+    ["2", "市场/语种分桶", `当前范围：${scopeLocale.rawMarket || "未配置"}，gl=${scopeLocale.googleGl || "-"}，hl=${scopeLocale.googleHl || "-"}`],
+    ["3", "本地规则初筛", "用 Excel 标准、Semrush 字段、站点角色先过滤明显不合适的词"],
+    ["4", "AI 复核机会池", "让 AI 按标准解释为什么写、更新、合并或暂不做"],
+    ["5", "SERP API 校验", "拉取真实前 10 后，再决定文章页、集合页、产品页或不做"],
+    ["6", "进入生产队列", "只把市场匹配、站点匹配、数据足够的任务推给文章生成"],
+  ];
+
+  container.innerHTML = `
+    <section class="review-report-section global-brain-section">
+      <div class="global-brain-scope-strip">
+        <article>
+          <span>MARKET SCOPE</span>
+          <strong>${escapeHtml(globalBrainMarketLabel(snapshot.scopeValue))}</strong>
+          <p>${escapeHtml(scopeLocale.configured ? `${scopeLocale.market} / ${scopeLocale.language}` : "未配置目标市场")}</p>
+        </article>
+        <article>
+          <span>GOOGLE SERP PARAMS</span>
+          <strong>${escapeHtml(`gl=${scopeLocale.googleGl || "-"}`)}</strong>
+          <p>${escapeHtml(`hl=${scopeLocale.googleHl || "-"}，拉取 SERP 时必须带这组参数`)}</p>
+        </article>
+        <article>
+          <span>SEMRUSH DATABASE</span>
+          <strong>${escapeHtml(scopeLocale.semrushDatabase || "split")}</strong>
+          <p>关键词导出库必须和市场一致，否则只进入待复核。</p>
+        </article>
+        <article>
+          <span>REQUEST MODE</span>
+          <strong>MANUAL</strong>
+          <p>本页只读缓存，不会自动持续请求你的主站或 Google。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="review-report-section global-brain-section">
+      <div class="review-report-section-head">
+        <p>GLOBAL ASSET HEALTH</p>
+        <h4>全局资产健康度</h4>
+        <span>先看当前市场下已经掌握了多少真实资产：站点、产品、文章、关键词、复盘数据。资产越完整，Agent 决策越不容易自嗨。</span>
+      </div>
+      <div class="review-report-metrics global-brain-metrics">
+        ${dashboardMetric("SITES", formatNumber(sites.length), "主站 + 博客站群", "#2f7668")}
+        ${dashboardMetric("PRODUCT ASSETS", formatNumber(products.length), "商业承接资产", "#b57b2e")}
+        ${dashboardMetric("POST INVENTORY", formatNumber(posts.length), "已读取文章", "#4f6ee8")}
+        ${dashboardMetric("KEYWORDS", formatNumber(keywords.length), "当前市场关键词", "#101827")}
+        ${dashboardMetric("P0 / P1", formatNumber(p0p1), "优先机会", "#7b3fe4")}
+        ${dashboardMetric("OPPORTUNITIES", formatNumber(opportunities.length), "内容机会池", "#4e8c57")}
+        ${dashboardMetric("REVIEW DATA", review ? "READY" : "MISSING", review ? "GSC/GA4 已缓存" : "等待复盘数据", review ? "#2f7668" : "#c46a2b")}
+        ${dashboardMetric("SERP", hasSerpData ? "READY" : "WAITING", hasSerpData ? "已缓存真实 SERP" : "等待拉取 SERP", hasSerpData ? "#2f7668" : "#c46a2b")}
+      </div>
+    </section>
+
+    <section class="review-report-section global-brain-section">
+      <div class="review-report-section-head">
+        <p>DATA READINESS</p>
+        <h4>数据就绪度</h4>
+        <span>这里区分“真实已拉取”和“还没验证”。没通过这一层，不应该直接让 AI 批量写文章。</span>
+      </div>
+      ${reportDataTable(["数据层", "状态", "说明"], dataRows)}
+    </section>
+
+    <section class="review-report-section global-brain-section">
+      <div class="review-report-section-head">
+        <p>POST INVENTORY SOURCES</p>
+        <h4>文章库存来源</h4>
+        <span>这里列出当前市场匹配站点的文章读取情况。如果某个站点未读取，总文章数就不会包含它。</span>
+      </div>
+      ${reportDataTable(["站点", "类型", "缓存状态", "最近结果"], postCacheRows)}
+    </section>
+
+    <section class="review-report-section global-brain-section" id="globalBrainTaskQueue">
+      <div class="review-report-section-head">
+        <p>DECISION MAP</p>
+        <h4>全局决策地图</h4>
+        <span>主站负责商业承接，博客站群负责上游内容覆盖。这里先把关键词、产品和内容机会放到同一张地图里。</span>
+      </div>
+      <div class="global-brain-map">
+        <article class="global-brain-map-card main">
+          <span>主站商业侧</span>
+          <strong>${formatNumber(mainKeywords)}</strong>
+          <p>主站关键词候选。依赖产品资产、集合页和主站博客做商业前教育。</p>
+        </article>
+        <article class="global-brain-map-card">
+          <span>博客站群侧</span>
+          <strong>${formatNumber(blogKeywords)}</strong>
+          <p>博客关键词候选。重点看站点角色、市场语言和是否与主站抢词。</p>
+        </article>
+        <article class="global-brain-map-card warning">
+          <span>数据缺口</span>
+          <strong>${formatNumber(tasks.length)}</strong>
+          <p>这些缺口会影响 Agent 自动决策，需要进入任务池逐步补齐。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="review-report-section global-brain-section">
+      <div class="review-report-section-head">
+        <p>AGENT PIPELINE</p>
+        <h4>从数据到生产的执行链路</h4>
+        <span>SERP API 已作为第 5 步数据层接入，用来做“最终页面类型校验”，而不是替代前面的关键词、站点和内容资产判断。</span>
+      </div>
+      ${reportDataTable(["步骤", "模块", "规则"], flowRows)}
+    </section>
+
+    <section class="review-report-section global-brain-section">
+      <div class="review-report-section-head">
+        <p>SITE MATRIX</p>
+        <h4>站点矩阵</h4>
+        <span>这里只展示当前市场匹配的站点。被排除的站点不会进入生产队列，避免 DE 站点混入 US 关键词。</span>
+      </div>
+      ${reportDataTable(["站点", "类型", "角色", "市场 / 语言", "状态"], siteRows)}
+    </section>
+
+    <section class="review-report-section global-brain-section">
+      <div class="review-report-section-head">
+        <p>GLOBAL TASK QUEUE</p>
+        <h4>任务池草案</h4>
+        <span>第一版先用本地规则生成任务。下一步可以把这部分交给 siteDiagnosis / globalBrain AI 阶段，输出结构化 JSON。</span>
+      </div>
+      ${reportDataTable(["优先级", "任务", "为什么做"], taskRows)}
+    </section>
+
+    <section class="review-report-section global-brain-section">
+      <div class="review-report-section-head">
+        <p>CONTENT OPPORTUNITY SNAPSHOT</p>
+        <h4>内容机会快照</h4>
+        <span>这里读取内容中枢当前机会池。后续全局大脑会跨所有站点批量生成机会池，而不只看当前选中的站点。</span>
+      </div>
+      ${reportDataTable(["关键词", "目标站点", "动作", "优先级", "分数"], opportunityRows)}
+    </section>
+  `;
+
+  if ($("globalBrainStatus")) {
+    $("globalBrainStatus").textContent = `已刷新全局大脑：当前市场 ${scopeLocale.rawMarket || "未配置"}，${sites.length} 个匹配站点，${keywords.length} 个匹配关键词，${products.length} 个产品资产，${posts.length} 篇文章。`;
+  }
+}
+
+function focusGlobalBrainTaskQueue() {
+  const target = $("globalBrainTaskQueue");
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+  target.classList.add("is-flashing");
+  window.setTimeout(() => target.classList.remove("is-flashing"), 1200);
+}
+
 async function loadGoogleReviewData() {
   const sourceId = state.selectedGoogleDataSourceId;
   if (!sourceId) throw new Error("请先保存并选择一个 Google 数据源。");
@@ -4193,6 +4804,7 @@ function renderAll() {
   renderImageConfig();
   renderProductAssets();
   renderGoogleDataSources();
+  renderGlobalBrain();
   renderTodos();
   applyActivePage(state.activePage);
   updateActionStates();
@@ -4591,6 +5203,10 @@ function stripOpportunityPromptContext(prompt = "") {
   return String(prompt || "").replace(/\n+## Content Hub Internal Link Plan[\s\S]*$/i, "").trim();
 }
 
+function stripRuntimePromptContext(prompt = "") {
+  return stripOpportunityPromptContext(prompt).replace(/\n+## Real SERP Data[\s\S]*$/i, "").trim();
+}
+
 function opportunityPromptContext(item = selectedItem()) {
   const opportunity = state.contentHub.activeOpportunity;
   if (!opportunity || !item || opportunity.keywordId !== item.id) return "";
@@ -4627,11 +5243,14 @@ function opportunityPromptContext(item = selectedItem()) {
 }
 
 async function ensureArticlePrompt(item) {
+  await ensureSerpForArticle(item);
   const currentPrompt = $("promptOutput").value || state.prompt || "";
   if (promptHasArticleFormat(currentPrompt) && promptHasLocaleGuardrail(currentPrompt)) {
-    state.prompt = stripOpportunityPromptContext(currentPrompt);
+    state.prompt = stripRuntimePromptContext(currentPrompt);
     const context = opportunityPromptContext(item);
     if (context) state.prompt = `${state.prompt}\n\n${context}`.trim();
+    const serpContext = serpPromptContext(item);
+    if (serpContext) state.prompt = `${state.prompt}\n\n${serpContext}`.trim();
     $("promptOutput").value = state.prompt;
     return;
   }
@@ -4649,7 +5268,7 @@ async function ensureArticlePrompt(item) {
     state.prompt = currentPrompt;
   }
 
-  state.prompt = stripOpportunityPromptContext(state.prompt);
+  state.prompt = stripRuntimePromptContext(state.prompt);
 
   if (!promptHasArticleFormat(state.prompt) || !promptHasLocaleGuardrail(state.prompt)) {
     state.prompt = `${state.prompt || ""}\n${requiredArticleFormatPrompt()}`.trim();
@@ -4657,6 +5276,8 @@ async function ensureArticlePrompt(item) {
 
   const context = opportunityPromptContext(item);
   if (context) state.prompt = `${state.prompt}\n\n${context}`.trim();
+  const serpContext = serpPromptContext(item);
+  if (serpContext) state.prompt = `${state.prompt}\n\n${serpContext}`.trim();
 
   $("promptOutput").value = state.prompt;
 }
@@ -5457,6 +6078,30 @@ function bindEvents() {
   $("loadGoogleReviewDataBtn").addEventListener("click", () =>
     loadGoogleReviewData().catch((error) => ($("googleDataStatus").textContent = `拉取失败：${error.message}`)),
   );
+  $("globalBrainMarketInput").addEventListener("change", () => {
+    state.globalBrain.selectedMarket = $("globalBrainMarketInput").value || "__project__";
+    renderGlobalBrain();
+    saveWorkspaceDraft();
+  });
+  $("globalBrainMarketIsolationInput").addEventListener("change", () => {
+    state.globalBrain.requireMarketIsolation = $("globalBrainMarketIsolationInput").checked;
+    renderGlobalBrain();
+    saveWorkspaceDraft();
+  });
+  $("saveSerpApiConfigBtn").addEventListener("click", () =>
+    withButtonBusy("saveSerpApiConfigBtn", () => saveSerpApiConfig().catch((error) => ($("serpApiStatus").textContent = `保存失败：${error.message}`))),
+  );
+  $("testSerpApiBtn").addEventListener("click", () =>
+    withButtonBusy("testSerpApiBtn", () => testSerpApiSearch().catch((error) => ($("serpApiStatus").textContent = `SERP 拉取失败：${error.message}`))),
+  );
+  $("refreshGlobalBrainBtn").addEventListener("click", () =>
+    withButtonBusy("refreshGlobalBrainBtn", () => refreshGlobalBrainPostInventory().catch((error) => ($("globalBrainStatus").textContent = `刷新失败：${error.message}`))),
+  );
+  $("buildGlobalTasksBtn").addEventListener("click", () => {
+    renderGlobalBrain();
+    focusGlobalBrainTaskQueue();
+    $("globalBrainStatus").textContent = "已生成本地任务池并定位到任务池区域；拉取 SERP 后会作为最终页面类型校验层。";
+  });
   $("exportCsvBtn").addEventListener("click", exportKeywordCsv);
   $("exportCalendarBtn").addEventListener("click", exportCalendarCsv);
   $("exportStateBtn").addEventListener("click", () => exportStateJson().catch((error) => setArticleOutput(error.message)));
@@ -5497,7 +6142,7 @@ function bindEvents() {
 async function init() {
   state.project = readProject();
   bindEvents();
-  const restored = restoreWorkspaceDraft();
+  restoreWorkspaceDraft();
   renderAll();
   activatePageForLocation();
 
@@ -5518,6 +6163,9 @@ async function init() {
     });
     await loadImageConfig().catch((error) => {
       $("imageConfigStatus").textContent = `图片 API 配置读取失败：${error.message}`;
+    });
+    await loadSerpApiConfig().catch((error) => {
+      $("serpApiStatus").textContent = `SerpApi 配置读取失败：${error.message}`;
     });
     await loadProductAssets().catch((error) => {
       $("productAssetsStatus").textContent = `产品资产读取失败：${error.message}`;
