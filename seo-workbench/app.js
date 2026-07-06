@@ -89,6 +89,7 @@ const busyActionIds = new Set();
 
 const state = {
   project: {},
+  projectProfiles: {},
   standard: null,
   standardDirty: false,
   keywords: [],
@@ -125,6 +126,9 @@ const state = {
   imageConfig: null,
   productAssets: null,
   serpApiConfig: null,
+  databaseConfig: null,
+  databaseSchemaStatus: null,
+  databaseMemorySummary: null,
   serpData: null,
   activePage: "setup",
   contentHub: {
@@ -142,6 +146,10 @@ const state = {
     showIncompatibleSites: false,
     opportunityPage: 1,
     opportunityPageSize: 25,
+    agentQueue: [],
+    agentQueueBatchId: "",
+    agentQueueRunning: false,
+    agentAutoUpload: true,
     lastSummary: null,
   },
   bulkPublish: {
@@ -162,6 +170,8 @@ const state = {
   todos: [],
 };
 
+let databaseAutoSyncTimer = null;
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -172,7 +182,7 @@ function escapeHtml(value) {
 }
 
 const PAGE_CONFIG = {
-  setup: ["project", "standard", "ai-stages"],
+  setup: ["project", "database", "standard", "ai-stages"],
   keywords: ["keywords", "allocation"],
   intelligence: ["content-hub"],
   globalBrain: ["global-brain"],
@@ -256,6 +266,325 @@ async function api(path, payload = null) {
   const data = text ? JSON.parse(text) : {};
   if (!response.ok) throw new Error(data.error || `${path} returned ${response.status}`);
   return data;
+}
+
+function renderDatabaseConfig() {
+  const config = state.databaseConfig || {};
+  const status = state.databaseSchemaStatus || {};
+  const connectionInput = $("databaseConnectionInput");
+  if (connectionInput) {
+    connectionInput.value = "";
+    connectionInput.placeholder = config.hasConnectionString
+      ? `已保存：${config.connectionPreview || "PostgreSQL 连接串"}，留空表示继续使用`
+      : "postgresql://postgres:password@192.168.0.136:5432/postgres";
+  }
+  if ($("databaseSchemaInput")) $("databaseSchemaInput").value = config.schema || "seo_agent";
+  if ($("databaseEnabledInput")) $("databaseEnabledInput").checked = config.enabled !== false;
+  if ($("databaseAutoSyncInput")) $("databaseAutoSyncInput").checked = Boolean(config.autoSync);
+  if ($("clearDatabaseConnectionInput")) $("clearDatabaseConnectionInput").checked = false;
+
+  const tables = status.tables || [];
+  const expected = status.expectedTables || ["articles", "keywords", "posts", "serp_snapshots", "sites", "tasks"];
+  const missing = new Set(status.missingTables || []);
+  const memory = state.databaseMemorySummary || {};
+  const memoryCounts = memory.counts || {};
+  const memoryTotal = Object.values(memoryCounts).reduce((sum, value) => sum + Number(value || 0), 0);
+  const cards = $("databaseStatusCards");
+  if (cards) {
+    cards.innerHTML = [
+      ["连接状态", status.connected ? (status.ok ? "READY" : "PARTIAL") : config.hasConnectionString ? "SAVED" : "MISSING", status.message || config.lastMessage || "等待测试连接"],
+      ["Schema", config.schema || "seo_agent", `目标 schema：${config.schema || "seo_agent"}`],
+      ["已发现表", String(tables.length || 0), tables.length ? tables.join(" / ") : "尚未读取"],
+      ["缺失表", String(status.missingTables?.length || 0), status.missingTables?.length ? status.missingTables.join(" / ") : "无"],
+      ["记忆记录", String(memoryTotal || 0), memory.ok ? Object.entries(memoryCounts).map(([key, value]) => `${key}: ${value}`).join(" / ") : "点击读取记忆摘要"],
+    ]
+      .map(([label, value, desc]) => `
+        <article class="database-card ${String(value).toLowerCase()}">
+          <span>${escapeHtml(label)}</span>
+          <strong>${escapeHtml(value)}</strong>
+          <p>${escapeHtml(desc)}</p>
+        </article>
+      `)
+      .join("");
+  }
+
+  if ($("databaseStatusOutput")) {
+    const tableLines = expected.map((table) => `${missing.has(table) ? "[MISSING]" : "[OK]"} ${table}`);
+    $("databaseStatusOutput").textContent = status.connected
+      ? [
+          status.message || "数据库已连接。",
+          `database: ${status.database || "-"}`,
+          `user: ${status.user || "-"}`,
+          `schema: ${status.schema || config.schema || "seo_agent"}`,
+          "",
+          ...tableLines,
+        ].join("\n")
+      : config.hasConnectionString
+        ? `已保存连接：${config.connectionPreview || "PostgreSQL"}\n点击“测试连接”检查 seo_agent 表结构。`
+        : "还没有配置数据库连接。";
+  }
+
+  if ($("databaseStatus")) {
+    $("databaseStatus").textContent = config.hasConnectionString
+      ? `数据库配置已读取：${config.connectionPreview || "已保存连接串"}。`
+      : "连接串会保存到 config/database.local.json，不会提交到 Git。";
+  }
+}
+
+async function loadDatabaseConfig() {
+  state.databaseConfig = await api("/api/database/config");
+  state.databaseSchemaStatus = null;
+  renderDatabaseConfig();
+}
+
+function readDatabaseConfigForm() {
+  return {
+    enabled: $("databaseEnabledInput")?.checked !== false,
+    autoSync: Boolean($("databaseAutoSyncInput")?.checked),
+    connectionString: $("databaseConnectionInput")?.value.trim() || "",
+    schema: $("databaseSchemaInput")?.value.trim() || "seo_agent",
+    clearConnectionString: Boolean($("clearDatabaseConnectionInput")?.checked),
+  };
+}
+
+async function saveDatabaseConfig() {
+  $("databaseStatus").textContent = "正在保存数据库连接配置...";
+  const data = await api("/api/database/config", { config: readDatabaseConfigForm() });
+  state.databaseConfig = data;
+  state.databaseSchemaStatus = null;
+  renderDatabaseConfig();
+  $("databaseStatus").textContent = data.hasConnectionString
+    ? `数据库连接已保存：${data.connectionPreview || "已保存连接串"}。`
+    : "数据库连接串已清除。";
+}
+
+async function testDatabaseConnection() {
+  $("databaseStatus").textContent = "正在测试 PostgreSQL 连接和 seo_agent 表结构...";
+  const data = await api("/api/database/test", { config: readDatabaseConfigForm() });
+  state.databaseSchemaStatus = data;
+  state.databaseConfig = data.config || state.databaseConfig;
+  renderDatabaseConfig();
+  $("databaseStatus").textContent = data.message || "数据库测试完成。";
+}
+
+function databaseSiteSnapshot() {
+  return allContentSiteOptions().map((site) => ({
+    ...site,
+    siteKey: site.key,
+    targetMarket: site.profile?.locale?.rawMarket || site.profile?.targetMarket || site.targetMarket || "",
+    targetLanguage: site.profile?.locale?.language || site.profile?.targetLanguage || site.targetLanguage || "",
+    googleGl: site.profile?.locale?.googleGl || site.googleGl || "",
+    googleHl: site.profile?.locale?.googleHl || site.googleHl || "",
+    semrushDatabase: site.profile?.locale?.semrushDatabase || site.semrushDatabase || "",
+    contentRole: site.profile?.roleKey || site.contentRole || "",
+  }));
+}
+
+function databasePostsSnapshot() {
+  const rows = [];
+  const selectedSite = selectedContentSite();
+  const pushPosts = (siteKey, posts = [], source = "api") => {
+    for (const post of posts || []) {
+      rows.push({
+        ...post,
+        source,
+        siteKey,
+        sourceSiteKey: siteKey,
+        externalId: post.externalId || post.id || post.ID || "",
+        contentFormat: post.content_md || post.contentMd ? "markdown" : post.content_html || post.contentHtml || post.content ? "html" : "unknown",
+      });
+    }
+  };
+
+  if (selectedSite) pushPosts(selectedSite.key, state.contentHub.posts || [], "content_hub");
+  for (const [siteKey, entry] of Object.entries(state.globalBrain.postsBySite || {})) {
+    pushPosts(siteKey, entry.posts || [], "global_brain_cache");
+  }
+  return rows;
+}
+
+function databaseSerpSnapshot() {
+  if (!state.serpData?.query && !state.serpData?.keyword) return [];
+  return [
+    {
+      ...state.serpData,
+      keywordId: selectedItem()?.id || "",
+      requestedAt: state.serpData.requestedAt || new Date().toISOString(),
+    },
+  ];
+}
+
+function databaseCurrentArticleSnapshot() {
+  if (!state.article?.trim()) return [];
+  const item = selectedItem();
+  const parts = state.articleParts || splitArticleForWp(state.article);
+  return [
+    {
+      id: state.generationRunId || state.articleSave?.relativePath || `current-${Date.now()}`,
+      keywordId: item?.id || "",
+      keyword: item?.keyword || parts.primaryKeyword || "",
+      title: parts.title || item?.keyword || "Untitled",
+      slug: parts.slug || slugify(item?.keyword || parts.title || "seo-article"),
+      siteKey: state.contentHub.selectedSiteKey || activeOpportunityForItem(item || {})?.siteKey || "",
+      status: state.articleSave?.relativePath ? "generated" : "draft",
+      savedPath: state.articleSave?.relativePath || "",
+      logPath: state.articleSave?.logRelativePath || "",
+      content: state.article,
+      articleParts: parts,
+      prompt: state.prompt,
+      brief: state.brief,
+      metaTitle: parts.metaTitle || extractH2Value(state.article, "Meta Title"),
+      metaDescription: parts.metaDescription || extractH2Value(state.article, "Meta Description"),
+      rawAiResponse: {
+        generationRunId: state.generationRunId || "",
+        generationLog: state.generationLog || [],
+      },
+      createdAt: new Date().toISOString(),
+    },
+  ];
+}
+
+function databaseArticlesSnapshot() {
+  const generated = (state.contentHub.generatedArticles || []).map((article) => ({
+    ...article,
+    status: article.uploadedAt ? "published" : "generated",
+    content: article.content || "",
+  }));
+  const current = databaseCurrentArticleSnapshot();
+  const seen = new Set();
+  return [...generated, ...current].filter((article) => {
+    const key = article.savedPath || article.id || `${article.siteKey}:${article.slug}:${article.keyword}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function databaseTasksSnapshot() {
+  return (state.contentHub.agentQueue || []).map((task) => ({
+    ...task,
+    siteKey: task.siteKey || state.contentHub.selectedSiteKey || "",
+  }));
+}
+
+function buildDatabaseWorkspaceSnapshot() {
+  const project = readProject();
+  return {
+    project,
+    syncedFrom: "seo-workbench-browser",
+    syncedAt: new Date().toISOString(),
+    sites: databaseSiteSnapshot(),
+    keywords: state.keywords || [],
+    posts: databasePostsSnapshot(),
+    serpSnapshots: databaseSerpSnapshot(),
+    tasks: databaseTasksSnapshot(),
+    articles: databaseArticlesSnapshot(),
+  };
+}
+
+function databaseSnapshotStats(snapshot = buildDatabaseWorkspaceSnapshot()) {
+  return {
+    sites: snapshot.sites?.length || 0,
+    keywords: snapshot.keywords?.length || 0,
+    posts: snapshot.posts?.length || 0,
+    serpSnapshots: snapshot.serpSnapshots?.length || 0,
+    tasks: snapshot.tasks?.length || 0,
+    articles: snapshot.articles?.length || 0,
+  };
+}
+
+function previewDatabaseSnapshot(message = "当前工作台同步预览") {
+  const snapshot = buildDatabaseWorkspaceSnapshot();
+  const stats = databaseSnapshotStats(snapshot);
+  const sampleSites = (snapshot.sites || []).slice(0, 8).map((site) => `- ${site.siteKey}: ${site.name || site.baseUrl || site.domain || "未命名站点"}`);
+  const sampleKeywords = (snapshot.keywords || []).slice(0, 8).map((item) => `- ${item.keyword || ""} -> ${item.assignedSite || item.assignedSiteLabel || item.siteKey || "未分配"}`);
+  const sampleArticles = (snapshot.articles || []).slice(0, 8).map((article) => `- ${article.title || article.keyword || "Untitled"} -> ${article.siteKey || "未绑定站点"}`);
+  const lines = [
+    message,
+    "",
+    `站点: ${stats.sites}`,
+    `关键词: ${stats.keywords}`,
+    `文章库存: ${stats.posts}`,
+    `SERP 快照: ${stats.serpSnapshots}`,
+    `Agent 任务: ${stats.tasks}`,
+    `生成稿: ${stats.articles}`,
+    "",
+    "站点样例",
+    ...(sampleSites.length ? sampleSites : ["- 暂无"]),
+    "",
+    "关键词样例",
+    ...(sampleKeywords.length ? sampleKeywords : ["- 暂无"]),
+    "",
+    "生成稿样例",
+    ...(sampleArticles.length ? sampleArticles : ["- 暂无"]),
+  ];
+  if ($("databaseStatusOutput")) $("databaseStatusOutput").textContent = lines.join("\n");
+  if ($("databaseStatus")) $("databaseStatus").textContent = "同步预览已生成，确认数量和样例无误后再点击“同步当前工作台”。";
+  return { snapshot, stats };
+}
+
+async function syncWorkspaceToDatabaseMemory() {
+  $("databaseStatus").textContent = "正在把当前工作台数据同步到 PostgreSQL...";
+  const snapshot = buildDatabaseWorkspaceSnapshot();
+  const stats = databaseSnapshotStats(snapshot);
+  if ($("databaseStatusOutput")) {
+    $("databaseStatusOutput").textContent = [
+      "准备同步到 PostgreSQL",
+      "",
+      `站点: ${stats.sites}`,
+      `关键词: ${stats.keywords}`,
+      `文章库存: ${stats.posts}`,
+      `SERP 快照: ${stats.serpSnapshots}`,
+      `Agent 任务: ${stats.tasks}`,
+      `生成稿: ${stats.articles}`,
+    ].join("\n");
+  }
+  const data = await api("/api/database/sync-workspace", { snapshot });
+  state.databaseMemorySummary = {
+    ok: true,
+    schema: state.databaseConfig?.schema || "seo_agent",
+    counts: data.counts || {},
+    readAt: data.syncedAt || new Date().toISOString(),
+  };
+  renderDatabaseConfig();
+  $("databaseStatus").textContent = data.message || "当前工作台数据已同步到数据库。";
+}
+
+function scheduleDatabaseAutoSync(reason = "工作台数据变化") {
+  const config = state.databaseConfig || {};
+  if (!config.enabled || !config.autoSync || !config.hasConnectionString) return;
+  window.clearTimeout(databaseAutoSyncTimer);
+  if ($("databaseStatus")) $("databaseStatus").textContent = `已安排自动同步：${reason}。`;
+  databaseAutoSyncTimer = window.setTimeout(() => {
+    syncWorkspaceToDatabaseMemory().catch((error) => {
+      if ($("databaseStatus")) $("databaseStatus").textContent = `自动同步失败：${error.message}`;
+    });
+  }, 8000);
+}
+
+async function loadDatabaseMemorySummary() {
+  $("databaseStatus").textContent = "正在读取 PostgreSQL 记忆摘要...";
+  const data = await api("/api/database/summary");
+  state.databaseMemorySummary = data;
+  renderDatabaseConfig();
+  $("databaseStatus").textContent = data.ok
+    ? `已读取数据库记忆摘要：${Object.entries(data.counts || {}).map(([key, value]) => `${key} ${value}`).join(" / ")}。`
+    : "记忆摘要读取完成。";
+}
+
+async function resetDatabaseMemory() {
+  const confirmed = window.confirm("确认清空 PostgreSQL 记忆库吗？这会删除 sites / keywords / posts / serp / tasks / articles 的已同步记录，但不会删除本地工作台草稿。");
+  if (!confirmed) return;
+  $("databaseStatus").textContent = "正在清空 PostgreSQL 记忆库...";
+  const data = await api("/api/database/reset", { confirm: true });
+  state.databaseMemorySummary = {
+    ok: true,
+    schema: data.schema || state.databaseConfig?.schema || "seo_agent",
+    counts: data.counts || {},
+    readAt: data.resetAt || new Date().toISOString(),
+  };
+  renderDatabaseConfig();
+  $("databaseStatus").textContent = data.message || "数据库记忆库已清空。";
 }
 
 function imageKeywordForCurrentArticle() {
@@ -536,6 +865,7 @@ async function testSerpApiSearch() {
   renderSerpApiConfig();
   renderGlobalBrain();
   saveWorkspaceDraft(`已缓存 SERP：${data.query} / gl=${data.gl || "-"} / hl=${data.hl || "-"}。`);
+  scheduleDatabaseAutoSync("SERP 快照已更新");
   $("serpApiStatus").textContent = `SERP 拉取成功：${data.query}，自然结果 ${data.organicResults?.length || 0} 条，PAA ${data.relatedQuestions?.length || 0} 条。`;
 }
 
@@ -645,6 +975,41 @@ function serpPromptContext(item = selectedItem()) {
     "- Identify missing angles, headings, FAQs, examples, and trust signals based on competitor titles/snippets.",
     "- Do not copy competitor wording. Use SERP only for intent, structure, and gap analysis.",
   ].join("\n");
+}
+
+function globalPlanningRequiresSerpForGeneration() {
+  const gate = globalPlanningHardGate("serpData");
+  if (!gate.key && !gate.blocks) return true;
+  return (gate.blocks || []).includes("article_generation");
+}
+
+function assertRealSerpReadyForArticle(item = selectedItem()) {
+  if (!globalPlanningRequiresSerpForGeneration()) return;
+  const project = articleGenerationProject();
+  const locale = project.locale || {};
+  if (serpMatchesItem(item, locale)) return;
+
+  const gate = globalPlanningHardGate("serpData");
+  const message = [
+    "已拦截生成：缺少当前关键词和当前市场匹配的真实 SERP。",
+    `关键词：${item?.keyword || "unknown"}`,
+    `目标 SERP：gl=${locale.googleGl || "not-set"} / hl=${locale.googleHl || "not-set"}`,
+    state.serpApiConfig?.enabled
+      ? "SerpApi 已配置，但本次没有拿到可匹配的结果。请重新拉取 SERP 或检查网络/API 配置。"
+      : "SerpApi 尚未配置或未启用。请先保存 SerpApi Key。",
+    gate.blocker || "正式生成文章前必须先完成真实 SERP Top 10 校验。",
+  ].join("\n");
+  appendGenerationLog("Agent 硬门槛拦截：SERP 未就绪", {
+    keyword: item?.keyword || "",
+    requiredGl: locale.googleGl || "",
+    requiredHl: locale.googleHl || "",
+    cachedQuery: state.serpData?.query || "",
+    cachedGl: state.serpData?.gl || "",
+    cachedHl: state.serpData?.hl || "",
+    serpApiEnabled: Boolean(state.serpApiConfig?.enabled),
+    gate,
+  }, "error");
+  throw new Error(message);
 }
 
 function requestId(prefix = "req") {
@@ -874,6 +1239,19 @@ function setSelectOrCustom(selectId, customInputId, fieldId, value = "") {
   syncCustomField(selectId, fieldId);
 }
 
+function ensureSelectValue(selectId, value = "") {
+  const select = $(selectId);
+  if (!select) return;
+  const normalized = String(value || "").trim();
+  if (normalized && !Array.from(select.options).some((option) => option.value === normalized)) {
+    const option = document.createElement("option");
+    option.value = normalized;
+    option.textContent = `${normalized}（已保存）`;
+    select.appendChild(option);
+  }
+  select.value = normalized;
+}
+
 function setProjectFields(project = {}) {
   $("domainInput").value = project.domain || "";
   $("siteTypeInput").value = project.siteType || "2C商城";
@@ -885,6 +1263,85 @@ function setProjectFields(project = {}) {
   $("mainSiteApiInput").value = project.siteApis?.mainPagesApi || "";
   $("mainBlogApiInput").value = project.siteApis?.mainBlogApi || "";
   $("blogApisInput").value = (project.siteApis?.blogApis || []).join("\n");
+  $("productApiEndpointInput").value = project.siteApis?.productApiEndpoint || "";
+  $("productApiHeadersInput").value = project.siteApis?.productApiHeaders || "";
+}
+
+function projectProfileKey(project = readProject()) {
+  const domain = String(project.domain || "").trim();
+  if (!domain) return "";
+  try {
+    return new URL(domain.startsWith("http") ? domain : `https://${domain}`).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    return domain.replace(/^https?:\/\//, "").replace(/^www\./, "").split("/")[0].toLowerCase();
+  }
+}
+
+function projectProfileLabel(key, profile = {}) {
+  const project = profile.project || profile;
+  return [project.domain || key, project.market, project.coreProducts].filter(Boolean).join("｜");
+}
+
+function renderProjectProfiles() {
+  const select = $("projectProfileSelect");
+  if (!select) return;
+  const currentKey = projectProfileKey(readProject());
+  const entries = Object.entries(state.projectProfiles || {}).sort(([a], [b]) => a.localeCompare(b));
+  select.innerHTML = [
+    `<option value="">当前临时定位 / 新建档案</option>`,
+    ...entries.map(([key, profile]) => `<option value="${escapeHtml(key)}">${escapeHtml(projectProfileLabel(key, profile))}</option>`),
+  ].join("");
+  select.value = entries.some(([key]) => key === currentKey) ? currentKey : "";
+}
+
+function saveCurrentProjectProfile() {
+  const project = readProject();
+  const key = projectProfileKey(project);
+  if (!key) {
+    $("projectSaveStatus").textContent = "请先填写主站域名，再保存定位档案。";
+    return;
+  }
+  state.projectProfiles = {
+    ...(state.projectProfiles || {}),
+    [key]: {
+      id: key,
+      savedAt: new Date().toISOString(),
+      project,
+    },
+  };
+  renderProjectProfiles();
+  saveWorkspaceDraft(`已保存 ${key} 的网站定位档案。以后可用下拉框切换，商业页面和产品 API 会一起恢复。`);
+}
+
+function loadSelectedProjectProfile() {
+  const key = $("projectProfileSelect")?.value || "";
+  const profile = state.projectProfiles?.[key];
+  if (!key || !profile) {
+    $("projectSaveStatus").textContent = "请选择一个已保存的网站定位档案。";
+    return;
+  }
+  setProjectFields(profile.project || profile);
+  state.project = readProject();
+  renderProjectProfiles();
+  renderLocaleStatus();
+  renderContentHub();
+  renderGlobalBrain();
+  saveWorkspaceDraft(`已载入 ${key} 的网站定位档案。`);
+}
+
+function deleteSelectedProjectProfile() {
+  const key = $("projectProfileSelect")?.value || "";
+  if (!key || !state.projectProfiles?.[key]) {
+    $("projectSaveStatus").textContent = "请选择一个要删除的网站定位档案。";
+    return;
+  }
+  const confirmed = window.confirm(`确认删除 ${key} 的定位档案吗？不会删除数据库里的站点和文章记录。`);
+  if (!confirmed) return;
+  const next = { ...(state.projectProfiles || {}) };
+  delete next[key];
+  state.projectProfiles = next;
+  renderProjectProfiles();
+  saveWorkspaceDraft(`已删除 ${key} 的网站定位档案。`);
 }
 
 function projectCompletenessHint(project = readProject()) {
@@ -919,6 +1376,7 @@ function saveWorkspaceDraft(message = "") {
       version: 1,
       savedAt: new Date().toISOString(),
       project: readProject(),
+      projectProfiles: state.projectProfiles || {},
       keywords: state.keywords,
       sites: state.sites,
       selectedId: state.selectedId,
@@ -965,6 +1423,7 @@ function restoreWorkspaceDraft() {
 
   try {
     const draft = JSON.parse(raw);
+    state.projectProfiles = draft.projectProfiles && typeof draft.projectProfiles === "object" ? draft.projectProfiles : {};
     setProjectFields(draft.project || {});
     state.project = readProject();
     state.keywords = Array.isArray(draft.keywords) ? draft.keywords : [];
@@ -998,6 +1457,8 @@ function restoreWorkspaceDraft() {
         opportunities: Array.isArray(draft.contentHub.opportunities) ? draft.contentHub.opportunities : [],
         selectedIds: Array.isArray(draft.contentHub.selectedIds) ? draft.contentHub.selectedIds : [],
         generatedArticles: Array.isArray(draft.contentHub.generatedArticles) ? draft.contentHub.generatedArticles : [],
+        agentQueue: Array.isArray(draft.contentHub.agentQueue) ? draft.contentHub.agentQueue : [],
+        agentAutoUpload: draft.contentHub.agentAutoUpload !== false,
       };
     }
     if (draft.bulkPublish && typeof draft.bulkPublish === "object") {
@@ -1084,8 +1545,8 @@ function setWpSiteForm(site = {}) {
     : "用户资料页生成的 Application Password";
   $("wpDefaultStatusInput").value = site.defaultStatus || "draft";
   $("wpDefaultCategoryInput").value = site.defaultCategoryId || "";
-  $("wpTargetMarketInput").value = site.targetMarket || "";
-  $("wpTargetLanguageInput").value = site.targetLanguage || "";
+  ensureSelectValue("wpTargetMarketInput", site.targetMarket || "");
+  ensureSelectValue("wpTargetLanguageInput", site.targetLanguage || "");
   $("wpContentRoleInput").value = site.contentRole || "博客A-知识教程";
   $("wpContentScopeInput").value = site.contentScope || "";
   updateActionStates();
@@ -1829,6 +2290,8 @@ async function loadContentHubSitePosts({ autoPlan = true, force = false } = {}) 
     state.contentHub.selectedIds = [];
     state.contentHub.activeOpportunity = null;
     state.contentHub.opportunityPage = 1;
+    state.contentHub.agentQueue = [];
+    state.contentHub.agentQueueBatchId = "";
     state.contentHub.lastSummary = null;
     renderContentHub();
     $("contentHubStatus").textContent = "请先选择一个具体站点。";
@@ -1912,6 +2375,7 @@ async function loadContentHubSitePosts({ autoPlan = true, force = false } = {}) 
     $("contentHubStatus").textContent = `已读取 ${state.contentHub.posts.length} 篇文章：${site.name}。`;
     if (autoPlan && state.keywords.length) planContentOpportunities();
     saveWorkspaceDraft(`已读取 ${site.name} 的 ${state.contentHub.posts.length} 篇文章。`);
+    scheduleDatabaseAutoSync(`${site.name} 文章库存已读取`);
   } finally {
     if (contentHubLoadState.promise === requestPromise) {
       contentHubLoadState.requestKey = "";
@@ -1989,6 +2453,7 @@ function parseJsonFromAiText(text = "") {
 
 function opportunityReviewPrompt(opportunities = [], site = selectedContentSite()) {
   const project = readProject();
+  const globalPlanning = state.standard?.globalPlanning || {};
   const sample = opportunities.slice(0, 80).map((item) => {
     const keyword = state.keywords.find((candidate) => candidate.id === item.keywordId) || {};
     return {
@@ -2017,12 +2482,17 @@ function opportunityReviewPrompt(opportunities = [], site = selectedContentSite(
 
   return [
     "你是 Google SEO 关键词机会池审核人。请基于本地规则结果、Semrush 字段和站点已有文章，审核哪些关键词值得写新文章。",
+    "你不是自由评判者，而是全局规划标准的执行层：必须先检查 hardGates，再判断 decisionTypes，最后按 scoring 和 capacityRules 排序。",
     "必须返回严格 JSON，不要 Markdown，不要解释性前后缀。",
     "",
     "输出格式：",
-    '{"items":[{"opportunityId":"","decision":"keep|drop|revise","priority":"P0|P1|P2|P3|Hold","score":0,"pageType":"","action":"","contentAngle":"","serpFeatureNotes":"","reason":""}]}',
+    '{"items":[{"opportunityId":"","decision":"keep|drop|revise|hold","planningDecision":"new_article|update_article|merge_or_redirect|commercial_page|hold","priority":"P0|P1|P2|P3|Hold","score":0,"pageType":"","action":"","contentAngle":"","serpFeatureNotes":"","needsSerpCheck":true,"requiredData":[],"nextAction":"","reason":""}]}',
     "",
     "审核规则：",
+    "- 先套用 globalPlanning.hardGates。触发 P0 硬门槛时，priority=Hold 或 P0，decision=hold/drop，并写清 requiredData。",
+    "- 按 globalPlanning.decisionTypes 判断是 new_article、update_article、merge_or_redirect、commercial_page 还是 hold。",
+    "- score 必须参考 globalPlanning.scoring：写新文通常需要达到 writeNow；更新旧文通常需要达到 updateNow；低于 holdBelow 应 hold/drop。",
+    "- 没有真实 SerpApi Top 10 时，不允许给最终页面类型，只能把 needsSerpCheck=true，并把 SERP 校验写入 nextAction。",
     "- 本地规则是 baseline，不要无理由推翻。",
     "- SERP Features 要影响判断：Shopping/Ads/Local Pack 更偏商业或本地，不适合普通博客；People Also Ask/Featured Snippet/Video/Image 可作为文章结构信号。",
     "- 如果目标站点语言或市场不匹配，decision=drop 或 priority=Hold。",
@@ -2037,7 +2507,16 @@ function opportunityReviewPrompt(opportunities = [], site = selectedContentSite(
     JSON.stringify(site ? inferSiteProfile(site) : {}, null, 2),
     "",
     "标准摘要：",
-    JSON.stringify({ scoring: state.standard?.scoring, signals: state.standard?.signals, localePolicy: state.standard?.localePolicy }, null, 2),
+    JSON.stringify(
+      {
+        scoring: state.standard?.scoring,
+        signals: state.standard?.signals,
+        localePolicy: state.standard?.localePolicy,
+        globalPlanning,
+      },
+      null,
+      2,
+    ),
     "",
     "待审核机会：",
     JSON.stringify(sample, null, 2),
@@ -2090,6 +2569,10 @@ async function aiReviewContentOpportunities() {
         action: review.action || item.action,
         contentAngle: review.contentAngle || "",
         serpFeatureNotes: review.serpFeatureNotes || "",
+        planningDecision: review.planningDecision || "",
+        needsSerpCheck: Boolean(review.needsSerpCheck),
+        requiredData: Array.isArray(review.requiredData) ? review.requiredData : [],
+        nextAction: review.nextAction || "",
         aiReason: review.reason || "",
       };
     })
@@ -2187,6 +2670,8 @@ function renderContentHub() {
     state.contentHub.selectedIds = [];
     state.contentHub.activeOpportunity = null;
     state.contentHub.opportunityPage = 1;
+    state.contentHub.agentQueue = [];
+    state.contentHub.agentQueueBatchId = "";
     state.contentHub.lastSummary = null;
     site = null;
     renderContentSiteOptions();
@@ -2212,6 +2697,7 @@ function renderContentHub() {
     .join("");
 
   renderPostInventory("contentInventoryView", posts, contentSourceType(site), "contentHub");
+  renderContentAgentQueue();
 
   const body = $("contentOpportunityTableBody");
   body.innerHTML = "";
@@ -2239,11 +2725,17 @@ function renderContentHub() {
       const sourceKeyword = state.keywords.find((keyword) => keyword.id === item.keywordId) || {};
       const serpNote = item.serpFeatureNotes || sourceKeyword.serpFeatures || "";
       const aiNote = item.aiReason || item.contentAngle || "";
+      const planningNotes = [
+        item.planningDecision ? `决策：${item.planningDecision}` : "",
+        item.needsSerpCheck ? "需要 SERP 终校验" : "",
+        item.nextAction ? `下一步：${item.nextAction}` : "",
+        item.requiredData?.length ? `缺数据：${item.requiredData.join(" / ")}` : "",
+      ].filter(Boolean);
       const tr = document.createElement("tr");
       tr.innerHTML = `
         <td><input type="checkbox" data-opportunity-check="${escapeHtml(item.id)}" ${selectedSet.has(item.id) ? "checked" : ""} /></td>
         <td><strong>${escapeHtml(item.keyword)}</strong><span class="asset-path">${escapeHtml(item.topicCluster)}</span>${serpNote ? `<span class="asset-path">SERP: ${escapeHtml(serpNote)}</span>` : ""}</td>
-        <td>${escapeHtml(item.coverage)}${matched ? `<span class="asset-path">${escapeHtml(matched)}</span>` : ""}${aiNote ? `<span class="asset-path">AI: ${escapeHtml(aiNote)}</span>` : ""}</td>
+        <td>${escapeHtml(item.coverage)}${matched ? `<span class="asset-path">${escapeHtml(matched)}</span>` : ""}${aiNote ? `<span class="asset-path">AI: ${escapeHtml(aiNote)}</span>` : ""}${planningNotes.map((note) => `<span class="asset-path">${escapeHtml(note)}</span>`).join("")}</td>
         <td>${escapeHtml(item.assignedSite)}</td>
         <td>${escapeHtml(item.pageType)}</td>
         <td>${escapeHtml(item.action)}</td>
@@ -2283,9 +2775,15 @@ function renderContentHub() {
 }
 
 function selectTopContentOpportunities() {
-  const count = Math.max(1, Number($("batchGenerateCountInput").value || 1));
+  const defaultCapacity = Number(state.standard?.globalPlanning?.capacityRules?.dailyNewArticlesDefault || 3);
+  const count = Math.max(1, Number($("batchGenerateCountInput").value || defaultCapacity));
   const candidates = (state.contentHub.opportunities || [])
-    .filter((item) => item.action === "新写文章" && item.coverage === "未覆盖")
+    .filter((item) => {
+      const decision = String(item.aiDecision || item.planningDecision || "").toLowerCase();
+      const priority = String(item.priority || "").toLowerCase();
+      if (decision === "drop" || decision === "hold" || priority === "hold") return false;
+      return item.action === "新写文章" && item.coverage === "未覆盖";
+    })
     .slice(0, count);
   state.contentHub.selectedIds = candidates.map((item) => item.id);
   renderContentHub();
@@ -2640,8 +3138,8 @@ function setBlogSiteForm(site = {}) {
   $("blogDefaultStatusInput").value = site.defaultStatus || "draft";
   $("blogDefaultCategoryInput").value = site.defaultCategoryId || "";
   $("blogDefaultCoverInput").value = site.defaultCoverUrl || "";
-  $("blogTargetMarketInput").value = site.targetMarket || "";
-  $("blogTargetLanguageInput").value = site.targetLanguage || "";
+  ensureSelectValue("blogTargetMarketInput", site.targetMarket || "");
+  ensureSelectValue("blogTargetLanguageInput", site.targetLanguage || "");
   $("blogContentRoleInput").value = site.contentRole || "博客A-知识教程";
   $("blogContentScopeInput").value = site.contentScope || "";
   updateActionStates();
@@ -2844,8 +3342,8 @@ function setMainSiteForm(site = {}) {
   $("mainDefaultImageIdInput").value = site.defaultImageId || "";
   $("mainCollectImagesInput").value = String(site.collectContentImages ?? 0);
   $("mainRelatedProductIdsInput").value = site.defaultRelatedProductIds || "";
-  $("mainTargetMarketInput").value = site.targetMarket || "";
-  $("mainTargetLanguageInput").value = site.targetLanguage || "";
+  ensureSelectValue("mainTargetMarketInput", site.targetMarket || "");
+  ensureSelectValue("mainTargetLanguageInput", site.targetLanguage || "");
   $("mainContentRoleInput").value = site.contentRole || "主站-博客";
   $("mainContentScopeInput").value = site.contentScope || "";
   updateActionStates();
@@ -3143,6 +3641,8 @@ function readProject() {
         .split(/\r?\n/)
         .map((line) => line.trim())
         .filter(Boolean),
+      productApiEndpoint: $("productApiEndpointInput").value.trim(),
+      productApiHeaders: $("productApiHeadersInput").value.trim(),
     },
   };
 }
@@ -3666,6 +4166,150 @@ function createContentGenerationBatch(site = selectedContentSite()) {
   };
 }
 
+function agentQueueStats(queue = state.contentHub.agentQueue || []) {
+  return queue.reduce(
+    (stats, task) => {
+      stats.total += 1;
+      stats[task.status] = (stats[task.status] || 0) + 1;
+      return stats;
+    },
+    { total: 0, queued: 0, running: 0, serp_ready: 0, generated: 0, uploaded: 0, failed: 0, skipped: 0 },
+  );
+}
+
+function agentStatusLabel(status = "") {
+  return (
+    {
+      queued: "待执行",
+      running: "运行中",
+      serp_ready: "SERP完成",
+      generated: "已生成",
+      uploaded: "已导入",
+      failed: "失败",
+      skipped: "跳过",
+    }[status] || status || "未知"
+  );
+}
+
+function withoutRequiredData(list = [], key = "") {
+  const normalized = String(key || "").trim().toLowerCase();
+  return (Array.isArray(list) ? list : []).filter((item) => String(item || "").trim().toLowerCase() !== normalized);
+}
+
+function updateAgentTask(taskId, updates = {}) {
+  state.contentHub.agentQueue = (state.contentHub.agentQueue || []).map((task) =>
+    task.id === taskId ? { ...task, ...updates, updatedAt: new Date().toISOString() } : task,
+  );
+  renderContentAgentQueue();
+}
+
+function selectedContentAgentOpportunities() {
+  const selectedIds = new Set(state.contentHub.selectedIds || []);
+  return (state.contentHub.opportunities || []).filter((item) => selectedIds.has(item.id));
+}
+
+function createContentAgentQueueFromSelected() {
+  const site = selectedContentSite();
+  if (!site) {
+    $("contentHubStatus").textContent = "请先选择本次要执行的站点。";
+    return [];
+  }
+
+  const opportunities = selectedContentAgentOpportunities();
+  if (!opportunities.length) {
+    $("contentHubStatus").textContent = "请先在内容机会池里勾选要加入 Agent 队列的关键词。";
+    return [];
+  }
+
+  const now = new Date().toISOString();
+  const queue = opportunities.map((opportunity, index) => ({
+    id: `${opportunity.id}-${Date.now()}-${index}`,
+    opportunityId: opportunity.id,
+    keywordId: opportunity.keywordId,
+    keyword: opportunity.keyword,
+    topicCluster: opportunity.topicCluster || "",
+    siteKey: site.key,
+    siteName: site.name,
+    planningDecision: opportunity.planningDecision || "",
+    priority: opportunity.priority || "",
+    score: opportunity.score || 0,
+    status: "queued",
+    step: "等待执行",
+    message: opportunity.nextAction || "等待 Agent 按标准执行 SERP、Brief、Prompt 和文章生成。",
+    requiredData: Array.isArray(opportunity.requiredData) ? opportunity.requiredData : [],
+    savedPath: "",
+    error: "",
+    createdAt: now,
+    updatedAt: now,
+  }));
+
+  state.contentHub.agentQueue = queue;
+  state.contentHub.agentQueueBatchId = "";
+  renderContentAgentQueue();
+  updateActionStates();
+  saveWorkspaceDraft(`已创建 ${queue.length} 条 Agent 任务。`);
+  scheduleDatabaseAutoSync("Agent 任务队列已创建");
+  $("contentHubStatus").textContent = `已创建 ${queue.length} 条 Agent 任务。请先检查队列，再点击“执行 Agent 队列”。`;
+  return queue;
+}
+
+function clearContentAgentQueue() {
+  if (state.contentHub.agentQueueRunning) {
+    $("contentHubStatus").textContent = "Agent 正在执行中，暂时不能清空队列。";
+    return;
+  }
+  state.contentHub.agentQueue = [];
+  state.contentHub.agentQueueBatchId = "";
+  renderContentAgentQueue();
+  updateActionStates();
+  saveWorkspaceDraft("已清空 Agent 任务队列。");
+}
+
+function renderContentAgentQueue() {
+  const summary = $("agentQueueSummary");
+  const list = $("agentQueueList");
+  if (!summary || !list) return;
+  if ($("agentAutoUploadInput")) $("agentAutoUploadInput").checked = state.contentHub.agentAutoUpload !== false;
+  const queue = state.contentHub.agentQueue || [];
+  const stats = agentQueueStats(queue);
+  summary.innerHTML = [
+    ["任务总数", stats.total],
+    ["待执行", stats.queued],
+    ["运行中", stats.running],
+    ["已生成", stats.generated],
+    ["已导入", stats.uploaded],
+    ["失败", stats.failed],
+  ]
+    .map(([label, value]) => `<div class="agent-stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`)
+    .join("");
+
+  if (!queue.length) {
+    list.innerHTML = `<div class="agent-empty">还没有 Agent 任务。先在机会池勾选关键词，再点击“创建 Agent 队列”。</div>`;
+    return;
+  }
+
+  list.innerHTML = queue
+    .map((task) => `
+      <article class="agent-task-card ${escapeHtml(task.status)}">
+        <div class="agent-task-main">
+          <span class="agent-status ${escapeHtml(task.status)}">${escapeHtml(agentStatusLabel(task.status))}</span>
+          <div>
+            <strong>${escapeHtml(task.keyword)}</strong>
+            <p>${escapeHtml(task.siteName || "")} · ${escapeHtml(task.priority || "未定")} · ${escapeHtml(task.planningDecision || "未定决策")} · ${escapeHtml(String(task.score || 0))} 分</p>
+          </div>
+        </div>
+        <div class="agent-task-step">
+          <strong>${escapeHtml(task.step || "等待执行")}</strong>
+          <span>${escapeHtml(task.message || "")}</span>
+          ${task.requiredData?.length ? `<span>缺数据：${escapeHtml(task.requiredData.join(" / "))}</span>` : ""}
+          ${task.savedPath ? `<span>保存位置：${escapeHtml(task.savedPath)}</span>` : ""}
+          ${task.error ? `<span class="agent-error">错误：${escapeHtml(task.error)}</span>` : ""}
+        </div>
+      </article>
+    `)
+    .join("");
+}
+
 function bulkPublishSiteOptions() {
   return allContentSiteOptions().filter((site) => ["blog", "wp"].includes(site.type) && site.compatible);
 }
@@ -3805,6 +4449,8 @@ async function loadBulkPublishSite(siteKey, { force = false } = {}) {
     state.contentHub.selectedIds = [];
     state.contentHub.activeOpportunity = null;
     state.contentHub.opportunityPage = 1;
+    state.contentHub.agentQueue = [];
+    state.contentHub.agentQueueBatchId = "";
     state.contentHub.lastSummary = null;
   }
 
@@ -3916,6 +4562,8 @@ function updateActionStates() {
   const contentPosts = postsForContentSite();
   const opportunities = state.contentHub.opportunities || [];
   const selectedOpportunityCount = (state.contentHub.selectedIds || []).length;
+  const agentQueueCount = (state.contentHub.agentQueue || []).length;
+  const runnableAgentTasks = (state.contentHub.agentQueue || []).filter((task) => ["queued", "failed"].includes(task.status)).length;
   const generatedForSite = uploadableArticlesForLatestBatch();
   const plannedBulkSites = plannedBulkPublishSites().length;
   const hasProductEndpoint = Boolean($("productApiEndpointInput")?.value.trim() || state.productAssets?.api?.endpoint);
@@ -3942,6 +4590,9 @@ function updateActionStates() {
   setActionEnabled("planContentOpportunitiesBtn", Boolean(contentSite && hasKeywords), "先选择站点并导入关键词。");
   setActionEnabled("selectTopOpportunitiesBtn", opportunities.length > 0, "先生成内容机会池。");
   setActionEnabled("clearOpportunitySelectionBtn", selectedOpportunityCount > 0, "当前没有勾选机会。");
+  setActionEnabled("createAgentQueueBtn", selectedOpportunityCount > 0 && !state.contentHub.agentQueueRunning, "先在内容机会池勾选要加入队列的关键词。");
+  setActionEnabled("runAgentQueueBtn", agentQueueCount > 0 && runnableAgentTasks > 0 && !state.contentHub.agentQueueRunning, "先创建 Agent 队列，或当前队列已全部完成。");
+  setActionEnabled("clearAgentQueueBtn", agentQueueCount > 0 && !state.contentHub.agentQueueRunning, "当前没有可清空的 Agent 队列。");
   setActionEnabled("batchGenerateSelectedBtn", selectedOpportunityCount > 0, "先在内容机会池勾选要生成的关键词。");
   setActionEnabled("batchUploadGeneratedBtn", Boolean(contentSite && generatedForSite.length), "先为当前站点批量生成文章。");
   setActionEnabled("saveCurrentBulkPlanBtn", Boolean(contentSite && ["blog", "wp"].includes(contentSite.type)), "先载入一个 WordPress 或自建博客站点。");
@@ -4541,6 +5192,7 @@ async function refreshGlobalBrainPostInventory() {
   const total = uniquePostsForGlobalBrain(sites).length;
   $("globalBrainStatus").textContent = `文章库存刷新完成：${total} 篇已缓存。${logs.join("；")}`;
   saveWorkspaceDraft("全局大脑文章库存已刷新。");
+  scheduleDatabaseAutoSync("全局文章库存已刷新");
 }
 
 const GLOBAL_BRAIN_MARKET_PRESETS = [
@@ -4938,6 +5590,7 @@ async function loadGoogleReviewData() {
 function renderAll() {
   state.project = readProject();
   renderLocaleStatus();
+  renderProjectProfiles();
   renderMetrics();
   renderStandard();
   renderFilters();
@@ -4949,6 +5602,7 @@ function renderAll() {
   renderGeneration();
   renderWpSites();
   renderImageConfig();
+  renderDatabaseConfig();
   renderProductAssets();
   renderGoogleDataSources();
   renderGlobalBrain();
@@ -5062,6 +5716,7 @@ async function importFile() {
 
   if (state.selectedId) await refreshSelected();
   saveWorkspaceDraft(`已导入 ${state.keywords.length} 个关键词，并自动保存到本机浏览器。`);
+  scheduleDatabaseAutoSync("关键词表已导入");
 }
 
 async function importCsv() {
@@ -5094,6 +5749,7 @@ async function importCsv() {
 
   if (state.selectedId) await refreshSelected();
   saveWorkspaceDraft(`已解析 ${state.keywords.length} 个关键词，并自动保存到本机浏览器。`);
+  scheduleDatabaseAutoSync("CSV 关键词已解析");
 }
 
 async function reanalyzeCurrentKeywords() {
@@ -5111,6 +5767,7 @@ async function reanalyzeCurrentKeywords() {
   await analyzeKeywords(state.keywords);
   $("importStatus").textContent = `已按当前网站定位重新分析 ${state.keywords.length} 个关键词。` + marketMismatchSummary(state.keywords);
   saveWorkspaceDraft(`已按当前网站定位重新分析 ${state.keywords.length} 个关键词，并自动保存。`);
+  scheduleDatabaseAutoSync("关键词已按当前定位重新分析");
 }
 
 async function refreshSelected() {
@@ -5374,6 +6031,32 @@ function promptHasLocaleGuardrail(prompt = "") {
   return text.includes("P0 Locale") || text.includes("Language Guardrail") || text.includes("Google SERP Locale");
 }
 
+function promptHasSemanticSeoGuardrail(prompt = "") {
+  return String(prompt || "").includes("Semantic SEO / Keyword Usage Guardrail");
+}
+
+function semanticSeoPromptSection(item = selectedItem()) {
+  const keyword = String(item?.keyword || "").trim();
+  return [
+    "",
+    "## Semantic SEO / Keyword Usage Guardrail",
+    keyword ? `Primary keyword: ${keyword}` : "Primary keyword: not-set",
+    "- Do not keyword-stuff. The primary keyword must appear naturally, not mechanically.",
+    "- Use the exact primary keyword only where it helps the reader: title/meta/H1 or first screen, one H2 if natural, and a few natural body mentions.",
+    "- Prefer semantic coverage over repetition: use related entities, synonyms, attributes, use cases, buyer questions, comparisons, risks, and decision criteria.",
+    "- If a paragraph already clearly answers the topic, do not repeat the exact keyword just to increase frequency.",
+    "- Avoid repeating the same exact phrase in consecutive headings, consecutive paragraphs, or every internal-link anchor.",
+    "- Build topical depth with subtopics from SERP/PAA/brief, not by inserting the same keyword again.",
+    "- In Content QA Checklist, confirm that the article uses semantic SEO and does not over-repeat the primary keyword.",
+  ].join("\n");
+}
+
+function ensureSemanticSeoPrompt(prompt = "", item = selectedItem()) {
+  const base = String(prompt || "").trim();
+  if (promptHasSemanticSeoGuardrail(base)) return base;
+  return `${base}\n${semanticSeoPromptSection(item)}`.trim();
+}
+
 function requiredArticleFormatPrompt() {
   const project = articleGenerationProject();
   const locale = project.locale || {};
@@ -5428,6 +6111,7 @@ function requiredArticleFormatPrompt() {
     "",
     "格式规则：",
     ...rules.map((rule) => `- ${rule}`),
+    semanticSeoPromptSection(selectedItem()),
   ].filter((line) => line !== null).join("\n");
 }
 
@@ -5474,18 +6158,23 @@ function opportunityPromptContext(item = selectedItem()) {
   ].join("\n");
 }
 
-async function ensureArticlePrompt(item) {
+async function ensureArticlePrompt(item, options = {}) {
   appendGenerationLog("文章 Prompt 准备开始", {
     keyword: item?.keyword || "",
     hasExistingPrompt: Boolean(($("promptOutput").value || state.prompt || "").trim()),
+    requireRealSerp: Boolean(options.requireRealSerp),
   });
   await ensureSerpForArticle(item);
+  if (options.requireRealSerp) {
+    assertRealSerpReadyForArticle(item);
+  }
   const currentPrompt = $("promptOutput").value || state.prompt || "";
   if (promptHasArticleFormat(currentPrompt) && promptHasLocaleGuardrail(currentPrompt)) {
     appendGenerationLog("复用当前 Prompt", {
       reason: "当前 Prompt 已包含文章格式规范和 Locale Guardrail。",
     });
     state.prompt = stripRuntimePromptContext(currentPrompt);
+    state.prompt = ensureSemanticSeoPrompt(state.prompt, item);
     const context = opportunityPromptContext(item);
     if (context) {
       state.prompt = `${state.prompt}\n\n${context}`.trim();
@@ -5544,6 +6233,7 @@ async function ensureArticlePrompt(item) {
       reason: "Prompt 缺少 WordPress 导入格式或 Locale Guardrail。",
     });
   }
+  state.prompt = ensureSemanticSeoPrompt(state.prompt, item);
 
   const context = opportunityPromptContext(item);
   if (context) {
@@ -5646,9 +6336,10 @@ async function generateArticle(options = {}) {
   resetGenerationLog("生成文章", item);
   assertArticleGenerationReady(item);
   state.articleSave = null;
-  await ensureArticlePrompt(item);
   const stageKey = $("articleStageInput").value;
   const stage = state.aiStages[stageKey] || state.aiStages.articleGeneration;
+  const isLocalMock = stage.provider === "local" || stage.apiFormat === "local";
+  await ensureArticlePrompt(item, { requireRealSerp: !isLocalMock });
   appendGenerationLog("文章生成阶段确认", {
     stageKey,
     label: stage.label || "",
@@ -5656,10 +6347,11 @@ async function generateArticle(options = {}) {
     model: stage.model || "",
     apiFormat: stage.apiFormat || "",
     endpoint: stage.endpoint || "/api/generate",
-    isLocalMock: stage.provider === "local" || stage.apiFormat === "local",
+    isLocalMock,
+    realSerpRequired: !isLocalMock,
   });
 
-  if (stage.provider === "local" || stage.apiFormat === "local") {
+  if (isLocalMock) {
     appendGenerationLog("使用 Local/Mock 生成文章", {
       endpoint: "/api/workflow/mock-article",
       note: "不会调用外部 AI；即使 Prompt 里有 SERP，上游 mock 文章也不会真正消化 SERP。",
@@ -5679,6 +6371,7 @@ async function generateArticle(options = {}) {
       const saveData = await saveGeneratedArticleToServer(item, options);
       rememberGeneratedArticle(item, saveData, options);
       saveWorkspaceDraft("文章草稿已自动保存到本机浏览器和本地 Markdown 目录。");
+      scheduleDatabaseAutoSync("文章草稿已生成");
     } catch (error) {
       appendGenerationLog("保存失败", { message: error.message }, "error");
       $("articleSaveStatus").textContent = `文章已生成，但保存到本地目录失败：${error.message}`;
@@ -5728,6 +6421,7 @@ async function generateArticle(options = {}) {
     const saveData = await saveGeneratedArticleToServer(item, options);
     rememberGeneratedArticle(item, saveData, options);
     saveWorkspaceDraft("文章草稿已自动保存到本机浏览器和本地 Markdown 目录。");
+    scheduleDatabaseAutoSync("文章草稿已生成");
   } catch (error) {
     appendGenerationLog("保存失败", { message: error.message }, "error");
     $("articleSaveStatus").textContent = `文章已生成，但保存到本地目录失败：${error.message}`;
@@ -5736,16 +6430,27 @@ async function generateArticle(options = {}) {
 }
 
 async function batchGenerateSelectedOpportunities() {
-  const selectedIds = state.contentHub.selectedIds || [];
-  const opportunities = (state.contentHub.opportunities || []).filter((item) => selectedIds.includes(item.id));
-  if (!opportunities.length) {
-    $("contentHubStatus").textContent = "请先在内容机会池里勾选要生成的关键词。";
+  if (!(state.contentHub.agentQueue || []).length) {
+    createContentAgentQueueFromSelected();
+  }
+  await runContentAgentQueue();
+}
+
+async function runContentAgentQueue() {
+  let queue = state.contentHub.agentQueue || [];
+  if (!queue.length) {
+    queue = createContentAgentQueueFromSelected();
+  }
+  if (!queue.length) return;
+
+  if (state.contentHub.agentQueueRunning) {
+    $("contentHubStatus").textContent = "Agent 队列正在执行中，请等待当前任务结束。";
     return;
   }
 
   const site = selectedContentSite();
   if (!site) {
-    $("contentHubStatus").textContent = "请先选择本次要生成文章的站点。";
+    $("contentHubStatus").textContent = "请先选择本次要执行的站点。";
     return;
   }
 
@@ -5753,38 +6458,156 @@ async function batchGenerateSelectedOpportunities() {
   state.contentHub.lastBatchId = batch.batchId;
   state.contentHub.lastBatchSiteKey = site.key;
   state.contentHub.lastBatchLabel = batch.batchLabel;
+  state.contentHub.agentQueueBatchId = batch.batchId;
+  state.contentHub.agentQueueRunning = true;
 
   const log = [];
-  $("batchGenerationLog").textContent = `准备批量生成 ${opportunities.length} 篇文章。\n批次：${batch.batchId}\n目录：generated-articles/${site.name}/${batch.batchId}/\n`;
-  for (let index = 0; index < opportunities.length; index += 1) {
-    const opportunity = opportunities[index];
-    const keyword = state.keywords.find((item) => item.id === opportunity.keywordId);
-    if (!keyword) {
-      log.push(`[跳过] ${opportunity.keyword}：关键词不存在`);
+  const runnable = queue.filter((task) => ["queued", "failed"].includes(task.status));
+  $("batchGenerationLog").textContent = `Agent 队列准备执行 ${runnable.length}/${queue.length} 条任务。\n批次：${batch.batchId}\n目录：generated-articles/${site.name}/${batch.batchId}/\n`;
+  renderContentAgentQueue();
+
+  for (let index = 0; index < runnable.length; index += 1) {
+    const task = runnable[index];
+    const opportunity = (state.contentHub.opportunities || []).find((item) => item.id === task.opportunityId);
+    const keyword = opportunity ? state.keywords.find((item) => item.id === opportunity.keywordId) : null;
+    if (!opportunity || !keyword) {
+      updateAgentTask(task.id, {
+        status: "failed",
+        step: "读取任务失败",
+        error: "关键词或机会不存在，请重新生成机会池。",
+        finishedAt: new Date().toISOString(),
+      });
+      log.push(`[失败] ${task.keyword}：关键词或机会不存在`);
       $("batchGenerationLog").textContent = log.join("\n");
       continue;
     }
 
     try {
+      updateAgentTask(task.id, {
+        status: "running",
+        step: "载入 Brief",
+        message: `正在执行 ${index + 1}/${runnable.length}：${opportunity.keyword}`,
+        error: "",
+        startedAt: new Date().toISOString(),
+      });
       state.contentHub.activeOpportunity = opportunity;
       state.selectedId = keyword.id;
-      $("contentHubStatus").textContent = `正在生成 ${index + 1}/${opportunities.length}：${opportunity.keyword}`;
+      $("contentHubStatus").textContent = `Agent 正在执行 ${index + 1}/${runnable.length}：${opportunity.keyword}`;
       await refreshSelected();
+      updateAgentTask(task.id, {
+        status: "running",
+        step: "SERP 终校验",
+        message: "正在确认当前关键词和当前市场的真实 Google Top 10。",
+      });
+      const stageKey = $("articleStageInput").value;
+      const stage = state.aiStages[stageKey] || state.aiStages.articleGeneration;
+      const isLocalMock = stage.provider === "local" || stage.apiFormat === "local";
+      if (!isLocalMock) {
+        await ensureSerpForArticle(keyword);
+        assertRealSerpReadyForArticle(keyword);
+        updateAgentTask(task.id, {
+          status: "serp_ready",
+          step: "SERP 已通过",
+          message: `${state.serpData?.organicResults?.length || 0} 条自然结果已进入 Prompt 上下文。`,
+          requiredData: withoutRequiredData(task.requiredData, "serpData"),
+        });
+      } else {
+        updateAgentTask(task.id, {
+          status: "running",
+          step: "Local 测试",
+          message: "当前文章阶段是 Local/Mock，跳过外部 SERP 硬拦截，仅用于测试格式。",
+        });
+      }
+      updateAgentTask(task.id, {
+        status: "running",
+        step: "生成并保存 Markdown",
+        message: "正在调用文章生成阶段，并保存 Markdown 与生成日志。",
+      });
       await generateArticle(batch);
       const savedPath = state.articleSave?.relativePath ? ` -> ${state.articleSave.relativePath}` : "";
+      updateAgentTask(task.id, {
+        status: "generated",
+        step: "已生成并保存",
+        message: state.contentHub.agentAutoUpload === false
+          ? "文章 Markdown 和生成日志已保存，可进入发布或人工复核。"
+          : "文章 Markdown 和生成日志已保存，等待 Agent 自动导入当前站点。",
+        requiredData: withoutRequiredData(task.requiredData, "serpData"),
+        savedPath: state.articleSave?.relativePath || "",
+        finishedAt: new Date().toISOString(),
+      });
       log.push(`[完成] ${opportunity.keyword}${savedPath}`);
     } catch (error) {
+      updateAgentTask(task.id, {
+        status: "failed",
+        step: "执行失败",
+        error: error.message,
+        finishedAt: new Date().toISOString(),
+      });
       log.push(`[失败] ${opportunity.keyword}：${error.message}`);
     }
     $("batchGenerationLog").textContent = log.join("\n");
+    saveWorkspaceDraft();
   }
 
-  $("contentHubStatus").textContent = `批量生成结束：${log.filter((line) => line.startsWith("[完成]")).length}/${opportunities.length} 篇完成。`;
+  state.contentHub.agentQueueRunning = false;
+  const completedCount = log.filter((line) => line.startsWith("[完成]")).length;
+  if (state.contentHub.agentAutoUpload !== false && completedCount > 0) {
+    if (!["blog", "wp"].includes(site.type)) {
+      state.contentHub.agentQueue = (state.contentHub.agentQueue || []).map((task) =>
+        task.status === "generated"
+          ? {
+              ...task,
+              step: "已生成，等待发布适配",
+              message: "当前站点类型暂未接入 Agent 自动导入，文章已保存到本地 Markdown，可走对应发布入口。",
+              updatedAt: new Date().toISOString(),
+            }
+          : task,
+      );
+      log.push(`[保留] ${site.name}：当前站点类型暂未接入 Agent 自动导入，已保存本地 Markdown。`);
+    } else {
+    try {
+      $("contentHubStatus").textContent = `Agent 已生成 ${completedCount} 篇，正在自动导入 ${site.name}...`;
+      const uploadResult = await uploadGeneratedArticlesToContentSite({ source: "agent" });
+      const failedCount = Array.isArray(uploadResult?.failed) ? uploadResult.failed.length : 0;
+      const uploadedAt = new Date().toISOString();
+      state.contentHub.agentQueue = (state.contentHub.agentQueue || []).map((task) =>
+        task.status === "generated"
+          ? {
+              ...task,
+              status: failedCount ? "generated" : "uploaded",
+              step: failedCount ? "已生成，导入需复核" : "已导入当前站点",
+              message: failedCount
+                ? "本批次存在导入失败项，请查看批量生成日志和站点接口响应。"
+                : "文章已按当前站点配置导入，发布状态以站点默认配置为准。",
+              uploadedAt: failedCount ? "" : uploadedAt,
+              updatedAt: uploadedAt,
+            }
+          : task,
+      );
+      log.push(failedCount ? `[导入复核] 存在 ${failedCount} 个失败项，请查看日志。` : `[导入完成] Agent 已自动导入当前站点。`);
+    } catch (error) {
+      state.contentHub.agentQueue = (state.contentHub.agentQueue || []).map((task) =>
+        task.status === "generated"
+          ? {
+              ...task,
+              step: "已生成，导入失败",
+              error: `自动导入失败：${error.message}`,
+              updatedAt: new Date().toISOString(),
+            }
+          : task,
+      );
+      log.push(`[导入失败] ${error.message}`);
+    }
+    }
+  }
+  $("batchGenerationLog").textContent = log.join("\n");
+  $("contentHubStatus").textContent = `Agent 队列执行结束：${completedCount}/${runnable.length} 条完成。`;
   renderContentHub();
-  saveWorkspaceDraft("批量生成任务已完成，结果已保存到本地草稿和 generated-articles 目录。");
+  saveWorkspaceDraft("Agent 队列执行结束，结果已保存到本地草稿和 generated-articles 目录。");
+  scheduleDatabaseAutoSync("Agent 队列执行结束");
 }
 
-async function uploadGeneratedArticlesToContentSite() {
+async function uploadGeneratedArticlesToContentSite(options = {}) {
   const site = selectedContentSite();
   if (!site) {
     $("contentHubStatus").textContent = "请先选择要导入到哪个站点。";
@@ -5857,8 +6680,10 @@ async function uploadGeneratedArticlesToContentSite() {
   $("contentHubStatus").textContent = failedCount
     ? `批量导入完成：提交 ${data.requested} 篇，成功 ${createdCount} 篇，失败 ${failedCount} 篇。`
     : `批量导入成功：${data.requested} 篇文章已提交到 ${site.name}。`;
-  saveWorkspaceDraft("本次生成稿已批量导入当前自建博客站点。");
+  saveWorkspaceDraft(options.source === "agent" ? "Agent 已自动导入本次生成稿。" : "本次生成稿已批量导入当前自建博客站点。");
   renderContentHub();
+  scheduleDatabaseAutoSync("文章已导入站点");
+  return data;
 }
 
 async function copyText(text) {
@@ -6040,6 +6865,8 @@ function bindEvents() {
     "mainSiteApiInput",
     "mainBlogApiInput",
     "blogApisInput",
+    "productApiEndpointInput",
+    "productApiHeadersInput",
   ];
   for (const id of projectInputs) {
     const eventName = $(id).tagName === "SELECT" ? "change" : "input";
@@ -6048,6 +6875,7 @@ function bindEvents() {
       if (id === "conversionInput") syncCustomField("conversionInput", "customConversionField");
       state.project = readProject();
       renderLocaleStatus();
+      renderProjectProfiles();
       renderContentHub();
       saveWorkspaceDraft();
     });
@@ -6068,6 +6896,15 @@ function bindEvents() {
 
   document.querySelectorAll("[data-project-preset]").forEach((button) => {
     button.addEventListener("click", () => applyProjectPreset(button.dataset.projectPreset));
+  });
+  $("saveProjectProfileBtn").addEventListener("click", saveCurrentProjectProfile);
+  $("loadProjectProfileBtn").addEventListener("click", loadSelectedProjectProfile);
+  $("deleteProjectProfileBtn").addEventListener("click", deleteSelectedProjectProfile);
+  $("projectProfileSelect").addEventListener("change", () => {
+    const key = $("projectProfileSelect").value || "";
+    $("projectSaveStatus").textContent = key
+      ? `已选择 ${key} 的定位档案，点击“载入定位”后会覆盖当前网站定位输入卡。`
+      : "当前是临时定位。填写主站域名后可保存成定位档案。";
   });
   $("previewSiteApisBtn").addEventListener("click", () =>
     withButtonBusy("previewSiteApisBtn", () =>
@@ -6322,6 +7159,8 @@ function bindEvents() {
     state.contentHub.selectedIds = [];
     state.contentHub.activeOpportunity = null;
     state.contentHub.opportunityPage = 1;
+    state.contentHub.agentQueue = [];
+    state.contentHub.agentQueueBatchId = "";
     state.contentHub.lastSummary = null;
     contentHubLoadState.lastLoadedKey = "";
     contentHubLoadState.lastLoadedAt = 0;
@@ -6375,16 +7214,34 @@ function bindEvents() {
   });
   $("selectTopOpportunitiesBtn").addEventListener("click", selectTopContentOpportunities);
   $("clearOpportunitySelectionBtn").addEventListener("click", clearContentOpportunitySelection);
+  $("createAgentQueueBtn").addEventListener("click", createContentAgentQueueFromSelected);
+  $("agentAutoUploadInput").addEventListener("change", () => {
+    state.contentHub.agentAutoUpload = $("agentAutoUploadInput").checked;
+    renderContentAgentQueue();
+    saveWorkspaceDraft("已更新 Agent 自动导入设置。");
+  });
+  $("runAgentQueueBtn").addEventListener("click", () =>
+    withButtonBusy("runAgentQueueBtn", () =>
+      runContentAgentQueue().catch((error) => {
+        state.contentHub.agentQueueRunning = false;
+        renderContentAgentQueue();
+        $("contentHubStatus").textContent = `Agent 执行失败：${error.message}`;
+      }),
+    ),
+  );
+  $("clearAgentQueueBtn").addEventListener("click", clearContentAgentQueue);
   $("batchGenerateSelectedBtn").addEventListener("click", () =>
     withButtonBusy("batchGenerateSelectedBtn", () =>
       batchGenerateSelectedOpportunities().catch((error) => ($("contentHubStatus").textContent = `批量生成失败：${error.message}`)),
     ),
   );
-  $("batchUploadGeneratedBtn").addEventListener("click", () =>
-    withButtonBusy("batchUploadGeneratedBtn", () =>
-      uploadGeneratedArticlesToContentSite().catch((error) => ($("contentHubStatus").textContent = `批量导入失败：${error.message}`)),
-    ),
-  );
+  if ($("batchUploadGeneratedBtn")) {
+    $("batchUploadGeneratedBtn").addEventListener("click", () =>
+      withButtonBusy("batchUploadGeneratedBtn", () =>
+        uploadGeneratedArticlesToContentSite().catch((error) => ($("contentHubStatus").textContent = `批量导入失败：${error.message}`)),
+      ),
+    );
+  }
   $("bulkPublishAiReviewInput").addEventListener("change", () => {
     state.bulkPublish.autoAiReview = $("bulkPublishAiReviewInput").checked;
     renderBulkPublish();
@@ -6473,6 +7330,40 @@ function bindEvents() {
   $("testImageSearchBtn").addEventListener("click", () =>
     withButtonBusy("testImageSearchBtn", () => testImageSearch().catch((error) => ($("imageConfigStatus").textContent = `搜图失败：${error.message}`))),
   );
+  $("reloadDatabaseConfigBtn").addEventListener("click", () =>
+    withButtonBusy("reloadDatabaseConfigBtn", () =>
+      loadDatabaseConfig().catch((error) => ($("databaseStatus").textContent = `数据库配置读取失败：${error.message}`)),
+    ),
+  );
+  $("saveDatabaseConfigBtn").addEventListener("click", () =>
+    withButtonBusy("saveDatabaseConfigBtn", () =>
+      saveDatabaseConfig().catch((error) => ($("databaseStatus").textContent = `数据库配置保存失败：${error.message}`)),
+    ),
+  );
+  $("testDatabaseConnectionBtn").addEventListener("click", () =>
+    withButtonBusy("testDatabaseConnectionBtn", () =>
+      testDatabaseConnection().catch((error) => ($("databaseStatus").textContent = `数据库连接失败：${error.message}`)),
+    ),
+  );
+  $("previewDatabaseSnapshotBtn").addEventListener("click", () => previewDatabaseSnapshot());
+  $("loadDatabaseSummaryBtn").addEventListener("click", () =>
+    withButtonBusy("loadDatabaseSummaryBtn", () =>
+      loadDatabaseMemorySummary().catch((error) => ($("databaseStatus").textContent = `读取记忆摘要失败：${error.message}`)),
+    ),
+  );
+  $("syncDatabaseSnapshotBtn").addEventListener("click", () =>
+    withButtonBusy("syncDatabaseSnapshotBtn", () =>
+      syncWorkspaceToDatabaseMemory().catch((error) => ($("databaseStatus").textContent = `同步数据库失败：${error.message}`)),
+    ),
+  );
+  $("resetDatabaseMemoryBtn").addEventListener("click", () =>
+    withButtonBusy("resetDatabaseMemoryBtn", () =>
+      resetDatabaseMemory().catch((error) => ($("databaseStatus").textContent = `清空记忆库失败：${error.message}`)),
+    ),
+  );
+  $("databaseAutoSyncInput").addEventListener("change", () =>
+    saveDatabaseConfig().catch((error) => ($("databaseStatus").textContent = `自动同步配置保存失败：${error.message}`)),
+  );
   $("imageProviderInput").addEventListener("change", () => {
     $("imageApiKeyInput").value = "";
     $("clearImageApiKeyInput").checked = false;
@@ -6507,6 +7398,9 @@ async function init() {
     });
     await loadSerpApiConfig().catch((error) => {
       $("serpApiStatus").textContent = `SerpApi 配置读取失败：${error.message}`;
+    });
+    await loadDatabaseConfig().catch((error) => {
+      $("databaseStatus").textContent = `数据库配置读取失败：${error.message}`;
     });
     await loadProductAssets().catch((error) => {
       $("productAssetsStatus").textContent = `产品资产读取失败：${error.message}`;

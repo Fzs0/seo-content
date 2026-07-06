@@ -30,7 +30,8 @@
 
         <nav class="step-nav">
           <a href="#project">01 网站定位</a>
-          <a href="#standard">02 标准配置</a>
+          <a href="#database">02 数据库</a>
+          <a href="#standard">03 标准配置</a>
           <a href="#keywords">03 关键词导入</a>
           <a href="#allocation">04 分站评分</a>
           <a href="#brief">05 Brief 规划</a>
@@ -95,6 +96,18 @@
           <p class="api-warning locale-status" id="localeStatus">
             P0 Locale：请先选择目标市场。正式关键词分析、SERP 判断和文章生成都必须绑定国家与语言。
           </p>
+
+          <div class="profile-switcher">
+            <label>
+              已保存定位档案
+              <select id="projectProfileSelect">
+                <option value="">当前临时定位 / 新建档案</option>
+              </select>
+            </label>
+            <button class="soft-btn" id="saveProjectProfileBtn">保存当前定位</button>
+            <button class="soft-btn" id="loadProjectProfileBtn">载入定位</button>
+            <button class="ghost-btn" id="deleteProjectProfileBtn">删除定位</button>
+          </div>
 
           <details class="preset-tree">
             <summary>定位模板树：选择一个接近你业务的结构</summary>
@@ -208,6 +221,55 @@
             <p class="api-warning">当前先保存为项目上下文，后续可以接接口自动抓主站商业页、主站博客和博客站文章，再反向优化关键词分站。</p>
           </details>
           <p class="inline-status" id="projectSaveStatus">项目定位和导入结果会自动保存到本机浏览器。</p>
+        </section>
+
+        <section class="panel" id="database">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Agent Memory</p>
+              <h3>PostgreSQL 记忆数据库</h3>
+            </div>
+              <div class="button-row">
+                <button class="soft-btn" id="reloadDatabaseConfigBtn">重新读取配置</button>
+                <button class="soft-btn" id="saveDatabaseConfigBtn">保存连接</button>
+                <button class="primary-btn" id="testDatabaseConnectionBtn">测试连接</button>
+                <button class="soft-btn" id="previewDatabaseSnapshotBtn">查看同步预览</button>
+                <button class="soft-btn" id="loadDatabaseSummaryBtn">读取记忆摘要</button>
+                <button class="primary-btn" id="syncDatabaseSnapshotBtn">同步当前工作台</button>
+                <button class="ghost-btn" id="resetDatabaseMemoryBtn">清空记忆库</button>
+              </div>
+            </div>
+
+          <div class="helper-copy">
+            这里是 Agent 的长期记忆入口。连接成功后，后续会逐步把关键词、站点文章、SERP 快照、任务队列和生成文章记录写入 PostgreSQL，而不是只依赖浏览器缓存。
+          </div>
+
+          <div class="form-grid database-grid">
+            <label class="wide-field">
+              PostgreSQL 连接串
+              <input id="databaseConnectionInput" type="password" placeholder="postgresql://postgres:password@192.168.0.136:5432/postgres" />
+            </label>
+            <label>
+              Schema
+              <input id="databaseSchemaInput" type="text" value="seo_agent" />
+            </label>
+              <label class="toggle-card">
+                <input type="checkbox" id="databaseEnabledInput" checked />
+                <span>启用数据库记忆层</span>
+              </label>
+              <label class="toggle-card">
+                <input type="checkbox" id="databaseAutoSyncInput" />
+                <span>生成、发布和拉取数据后自动同步</span>
+              </label>
+              <label class="toggle-card">
+                <input type="checkbox" id="clearDatabaseConnectionInput" />
+                <span>清除已保存连接串</span>
+            </label>
+          </div>
+
+          <div class="database-status-grid" id="databaseStatusCards"></div>
+          <pre id="databaseStatusOutput" class="markdown-box compact-box">还没有测试数据库连接。</pre>
+          <p class="inline-status" id="databaseStatus">连接串会保存到 config/database.local.json，不会提交到 Git。</p>
         </section>
 
         <section class="panel" id="standard">
@@ -450,8 +512,9 @@
               <button class="soft-btn" id="planContentOpportunitiesBtn">AI 复核并生成机会池</button>
               <button class="soft-btn" id="selectTopOpportunitiesBtn">按数量勾选优先词</button>
               <button class="ghost-btn" id="clearOpportunitySelectionBtn">清空勾选</button>
+              <button class="soft-btn" id="createAgentQueueBtn">创建 Agent 队列</button>
+              <button class="primary-btn" id="runAgentQueueBtn">执行 Agent 队列</button>
               <button class="primary-btn" id="batchGenerateSelectedBtn">批量生成勾选文章</button>
-              <button class="soft-btn" id="batchUploadGeneratedBtn">批量导入本次生成</button>
             </div>
           </div>
 
@@ -478,6 +541,30 @@
             <option value="Italian"></option>
             <option value="Portuguese"></option>
           </datalist>
+          <template id="siteMarketSelectOptions">
+            <option value="">请选择目标市场</option>
+            <option value="US / English">US / English</option>
+            <option value="UK / English">UK / English</option>
+            <option value="CA / English">CA / English</option>
+            <option value="AU / English">AU / English</option>
+            <option value="DE / German">DE / German</option>
+            <option value="FR / French">FR / French</option>
+            <option value="JP / Japanese">JP / Japanese</option>
+            <option value="ES / Spanish">ES / Spanish</option>
+            <option value="IT / Italian">IT / Italian</option>
+            <option value="PT / Portuguese">PT / Portuguese</option>
+            <option value="Global / English">Global / English</option>
+          </template>
+          <template id="siteLanguageSelectOptions">
+            <option value="">请选择内容语种</option>
+            <option value="English">English</option>
+            <option value="German">German</option>
+            <option value="French">French</option>
+            <option value="Japanese">Japanese</option>
+            <option value="Spanish">Spanish</option>
+            <option value="Italian">Italian</option>
+            <option value="Portuguese">Portuguese</option>
+          </template>
 
           <div class="content-hub-controls">
             <label>
@@ -532,6 +619,25 @@
 
           <div class="diagnosis-view inventory-view" id="contentInventoryView"></div>
           <div class="diagnosis-view" id="contentOptimizationView"></div>
+
+          <article class="agent-queue-panel">
+            <div class="agent-queue-head">
+              <div>
+                <p class="eyebrow">Controlled Agent Queue</p>
+                <h4>可控 Agent 任务队列</h4>
+                <p>把勾选机会变成可追踪任务：先校验站点和 SERP，再生成 Brief / Prompt / Markdown。失败会停在具体步骤，方便重试。</p>
+              </div>
+              <div class="agent-queue-actions">
+                <label class="checkbox-field content-rule-check">
+                  <input id="agentAutoUploadInput" type="checkbox" checked />
+                  生成后自动导入当前站点
+                </label>
+                <button class="ghost-btn" id="clearAgentQueueBtn">清空队列</button>
+              </div>
+            </div>
+            <div class="agent-queue-summary" id="agentQueueSummary"></div>
+            <div class="agent-queue-list" id="agentQueueList"></div>
+          </article>
 
           <div class="content-opportunity-toolbar">
             <div>
@@ -912,11 +1018,33 @@
               </label>
               <label>
                 目标市场
-                <input id="wpTargetMarketInput" type="text" list="siteMarketOptions" placeholder="例如：US / English、DE / German" />
+                <select id="wpTargetMarketInput">
+                  <option value="">请选择目标市场</option>
+                  <option value="US / English">US / English</option>
+                  <option value="UK / English">UK / English</option>
+                  <option value="CA / English">CA / English</option>
+                  <option value="AU / English">AU / English</option>
+                  <option value="DE / German">DE / German</option>
+                  <option value="FR / French">FR / French</option>
+                  <option value="JP / Japanese">JP / Japanese</option>
+                  <option value="ES / Spanish">ES / Spanish</option>
+                  <option value="IT / Italian">IT / Italian</option>
+                  <option value="PT / Portuguese">PT / Portuguese</option>
+                  <option value="Global / English">Global / English</option>
+                </select>
               </label>
               <label>
                 内容语种
-                <input id="wpTargetLanguageInput" type="text" list="siteLanguageOptions" placeholder="例如：English、German" />
+                <select id="wpTargetLanguageInput">
+                  <option value="">请选择内容语种</option>
+                  <option value="English">English</option>
+                  <option value="German">German</option>
+                  <option value="French">French</option>
+                  <option value="Japanese">Japanese</option>
+                  <option value="Spanish">Spanish</option>
+                  <option value="Italian">Italian</option>
+                  <option value="Portuguese">Portuguese</option>
+                </select>
               </label>
               <label>
                 负责板块
@@ -1002,11 +1130,33 @@
               </label>
               <label>
                 目标市场
-                <input id="blogTargetMarketInput" type="text" list="siteMarketOptions" placeholder="例如：US / English、DE / German" />
+                <select id="blogTargetMarketInput">
+                  <option value="">请选择目标市场</option>
+                  <option value="US / English">US / English</option>
+                  <option value="UK / English">UK / English</option>
+                  <option value="CA / English">CA / English</option>
+                  <option value="AU / English">AU / English</option>
+                  <option value="DE / German">DE / German</option>
+                  <option value="FR / French">FR / French</option>
+                  <option value="JP / Japanese">JP / Japanese</option>
+                  <option value="ES / Spanish">ES / Spanish</option>
+                  <option value="IT / Italian">IT / Italian</option>
+                  <option value="PT / Portuguese">PT / Portuguese</option>
+                  <option value="Global / English">Global / English</option>
+                </select>
               </label>
               <label>
                 内容语种
-                <input id="blogTargetLanguageInput" type="text" list="siteLanguageOptions" placeholder="例如：English、German" />
+                <select id="blogTargetLanguageInput">
+                  <option value="">请选择内容语种</option>
+                  <option value="English">English</option>
+                  <option value="German">German</option>
+                  <option value="French">French</option>
+                  <option value="Japanese">Japanese</option>
+                  <option value="Spanish">Spanish</option>
+                  <option value="Italian">Italian</option>
+                  <option value="Portuguese">Portuguese</option>
+                </select>
               </label>
               <label>
                 负责板块
@@ -1111,11 +1261,33 @@
               </label>
               <label>
                 目标市场
-                <input id="mainTargetMarketInput" type="text" list="siteMarketOptions" placeholder="例如：US / English" />
+                <select id="mainTargetMarketInput">
+                  <option value="">请选择目标市场</option>
+                  <option value="US / English">US / English</option>
+                  <option value="UK / English">UK / English</option>
+                  <option value="CA / English">CA / English</option>
+                  <option value="AU / English">AU / English</option>
+                  <option value="DE / German">DE / German</option>
+                  <option value="FR / French">FR / French</option>
+                  <option value="JP / Japanese">JP / Japanese</option>
+                  <option value="ES / Spanish">ES / Spanish</option>
+                  <option value="IT / Italian">IT / Italian</option>
+                  <option value="PT / Portuguese">PT / Portuguese</option>
+                  <option value="Global / English">Global / English</option>
+                </select>
               </label>
               <label>
                 内容语种
-                <input id="mainTargetLanguageInput" type="text" list="siteLanguageOptions" placeholder="例如：English" />
+                <select id="mainTargetLanguageInput">
+                  <option value="">请选择内容语种</option>
+                  <option value="English">English</option>
+                  <option value="German">German</option>
+                  <option value="French">French</option>
+                  <option value="Japanese">Japanese</option>
+                  <option value="Spanish">Spanish</option>
+                  <option value="Italian">Italian</option>
+                  <option value="Portuguese">Portuguese</option>
+                </select>
               </label>
               <label>
                 负责板块

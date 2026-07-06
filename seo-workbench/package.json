@@ -7,9 +7,10 @@
   "scripts": {
     "start": "node ./src/server/index.mjs",
     "dev": "node ./src/server/index.mjs",
-    "check": "node --check ./app.js && node --check ./src/server/index.mjs && node --check ./src/server/serpapi-store.mjs && node --check ./src/server/routes/articles.mjs && node --check ./src/server/routes/generate.mjs && node --check ./src/server/routes/images.mjs && node --check ./src/server/routes/products.mjs && node --check ./src/server/routes/serpapi.mjs && node --check ./src/server/routes/wp-sites.mjs && node --check ./src/server/routes/blog-sites.mjs && node --check ./src/server/routes/main-sites.mjs && node --check ./server.example.mjs"
+    "check": "node --check ./app.js && node --check ./src/server/index.mjs && node --check ./src/server/serpapi-store.mjs && node --check ./src/server/database-store.mjs && node --check ./src/server/routes/articles.mjs && node --check ./src/server/routes/database.mjs && node --check ./src/server/routes/generate.mjs && node --check ./src/server/routes/images.mjs && node --check ./src/server/routes/products.mjs && node --check ./src/server/routes/serpapi.mjs && node --check ./src/server/routes/wp-sites.mjs && node --check ./src/server/routes/blog-sites.mjs && node --check ./src/server/routes/main-sites.mjs && node --check ./server.example.mjs"
   },
   "dependencies": {
+    "pg": "^8.22.0",
     "undici": "^6.21.1"
   },
   "engines": {

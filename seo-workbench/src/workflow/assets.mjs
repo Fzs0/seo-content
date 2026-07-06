@@ -18,8 +18,7 @@ export function projectPages(project = {}) {
 }
 
 function plannedUrlFor(item) {
-  const base = item.assignedSite?.startsWith("主站") ? "/blog" : "/posts";
-  return `${base}/${slugify(item.topicCluster || item.pageGroup || item.keyword)}`;
+  return `/${slugify(item.topicCluster || item.pageGroup || item.keyword)}`;
 }
 
 function fallbackAsset(project = {}) {

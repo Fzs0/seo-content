@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { handleAiStagesRoute } from "./routes/ai-stages.mjs";
 import { handleArticlesRoute } from "./routes/articles.mjs";
 import { handleBlogSitesRoute } from "./routes/blog-sites.mjs";
+import { handleDatabaseRoute } from "./routes/database.mjs";
 import { handleGenerateRoute } from "./routes/generate.mjs";
 
 import { handleGoogleDataRoute } from "./routes/google-data.mjs";
@@ -177,6 +178,11 @@ export function createSeoWorkbenchServer() {
 
       if (url.pathname.startsWith("/api/serpapi")) {
         await handleSerpApiRoute(request, response, url.pathname);
+        return;
+      }
+
+      if (url.pathname.startsWith("/api/database")) {
+        await handleDatabaseRoute(request, response, url.pathname);
         return;
       }
 
