@@ -57,7 +57,7 @@ export function buildBrief(item, project = {}) {
     parentPage: asset.status === "existing" || asset.status === "needs_review" ? asset.url : "",
     targetAsset: asset,
     imagePlan: imagePlanFor(item),
-    recommendedUrl: item ? item.plannedUrl || `/${item.assignedSite.startsWith("主站") ? "blog" : "posts"}/${slugify(item.topicCluster || item.keyword)}` : "",
+    recommendedUrl: item ? item.plannedUrl || `/${slugify(item.topicCluster || item.keyword)}` : "",
   };
 }
 

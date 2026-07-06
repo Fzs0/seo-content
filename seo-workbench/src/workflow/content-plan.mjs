@@ -419,7 +419,7 @@ export function briefFor(item, project = {}) {
     `内容动作：${asset.contentAction}`,
     `资产判断：${asset.reason}`,
     `可否在正文直接链接：${canLinkToAsset ? "可以" : "不可以，先作为内链建议输出"}`,
-    `推荐 URL：/${item.assignedSite.startsWith("主站") ? "blog" : "posts"}/${slugify(item.keyword)}`,
+    `推荐 URL：/${slugify(item.keyword)}`,
     "",
     "## 评分依据",
     `- 需求分：${item.scores.demand}/20，搜索量 ${item.volume}`,

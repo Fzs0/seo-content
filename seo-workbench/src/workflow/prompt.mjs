@@ -44,6 +44,23 @@ function articleOutputFormatInstructions() {
   ].filter(Boolean);
 }
 
+function semanticSeoInstructions(item = {}) {
+  const keyword = String(item?.keyword || "").trim();
+
+  return [
+    "## Semantic SEO / Keyword Usage Guardrail",
+    keyword ? `Primary keyword: ${keyword}` : "Primary keyword: not-set",
+    "- Do not keyword-stuff. The primary keyword must appear naturally, not mechanically.",
+    "- Use the exact primary keyword only where it helps the reader: title/meta/H1 or first screen, one H2 if natural, and a few natural body mentions.",
+    "- Prefer semantic coverage over repetition: use related entities, synonyms, attributes, use cases, buyer questions, comparisons, risks, and decision criteria.",
+    "- If a paragraph already clearly answers the topic, do not repeat the exact keyword just to increase frequency.",
+    "- Avoid repeating the same exact phrase in consecutive headings, consecutive paragraphs, or every internal-link anchor.",
+    "- Build topical depth with subtopics from SERP/PAA/brief, not by inserting the same keyword again.",
+    "- In Content QA Checklist, confirm that the article uses semantic SEO and does not over-repeat the primary keyword.",
+    "",
+  ];
+}
+
 export function promptFor(item, project = {}, brief = "") {
   const refs = referencePlan(item);
   const locale = localeForProject(project);
@@ -89,6 +106,7 @@ export function promptFor(item, project = {}, brief = "") {
     "9. 内部链接必须遵守锚文本规范：同一目标 URL 不要重复完全相同的锚文本；不要为了换表达而写生硬短语；如果不能自然变化，就减少链接次数。",
     "10. 只有 Brief 中资产状态为 existing 的目标资产，才允许在正文生成可点击内部链接；planned、missing、needs_review 只能写入 Internal Link Suggestions，不要伪造或提前链接。",
     "",
+    ...semanticSeoInstructions(item),
     "## 锚文本规范",
     `原则：${STANDARD.anchorTextRules?.purpose || "内部链接要自然、具体、服务读者下一步。"}`,
     "",
