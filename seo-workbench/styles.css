@@ -210,6 +210,10 @@ button {
   display: none !important;
 }
 
+.legacy-action {
+  display: none !important;
+}
+
 .step-nav a {
   display: flex;
   align-items: center;
@@ -259,14 +263,6 @@ button {
   content: "07";
 }
 
-.step-nav a:nth-child(8)::before {
-  content: "08";
-}
-
-.step-nav a:nth-child(9)::before {
-  content: "09";
-}
-
 .step-nav a:hover {
   color: #fff9e9;
   border-color: rgba(248, 214, 143, 0.42);
@@ -293,6 +289,40 @@ button {
   min-width: 0;
   max-width: 100%;
   gap: 14px;
+}
+
+body[data-page="agent"] .hero {
+  order: -10;
+}
+
+body[data-page="agent"] .metric-grid {
+  order: -9;
+}
+
+body[data-page="agent"] #global-brain {
+  order: -8;
+}
+
+body[data-page="agent"] #content-hub {
+  order: -7;
+}
+
+body[data-page="agent"] #brief {
+  order: -6;
+}
+
+body[data-page="agent"] #generation {
+  order: -5;
+}
+
+body[data-page="agent"] #contentHubSummary,
+body[data-page="agent"] #contentInventoryView,
+body[data-page="agent"] #contentOptimizationView,
+body[data-page="agent"] .content-opportunity-toolbar,
+body[data-page="agent"] .content-opportunity-wrap,
+body[data-page="agent"] .content-batch-card,
+body[data-page="agent"] .global-brain-hero .review-hero-actions {
+  display: none !important;
 }
 
 .hero,
@@ -1015,6 +1045,28 @@ input[type="checkbox"] {
   line-height: 1.55;
 }
 
+.agent-queue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  min-width: min(100%, 520px);
+}
+
+.agent-queue-actions .content-rule-check {
+  min-height: 42px;
+  margin: 0;
+  padding-inline: 14px;
+  white-space: nowrap;
+}
+
+.agent-queue-actions .primary-btn,
+.agent-queue-actions .ghost-btn {
+  min-height: 42px;
+  padding-inline: 18px;
+}
+
 .agent-queue-summary {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1049,6 +1101,36 @@ input[type="checkbox"] {
   max-height: 420px;
   overflow: auto;
   padding-right: 4px;
+}
+
+.agent-rationale-panel {
+  padding: 14px;
+  border: 1px solid rgba(180, 111, 66, 0.18);
+  border-radius: 18px;
+  background:
+    linear-gradient(135deg, rgba(255, 248, 234, 0.96), rgba(240, 229, 206, 0.66)),
+    rgba(255, 253, 245, 0.84);
+}
+
+.agent-rationale-panel h5 {
+  margin: 0 0 8px;
+  color: var(--sage-deep);
+  font-size: 0.95rem;
+}
+
+.agent-rationale-panel p {
+  margin: 0 0 12px;
+  color: var(--ink-soft);
+  line-height: 1.6;
+}
+
+.agent-rationale-panel code {
+  padding: 2px 6px;
+  border-radius: 8px;
+  background: rgba(39, 60, 49, 0.08);
+  color: var(--copper-deep);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
 }
 
 .agent-empty,
@@ -1139,6 +1221,12 @@ input[type="checkbox"] {
 
 .agent-task-step strong {
   color: var(--ink);
+}
+
+.agent-remove-task {
+  width: max-content;
+  margin-top: 8px;
+  padding: 8px 12px;
 }
 
 .agent-error {
@@ -1356,6 +1444,16 @@ input[type="checkbox"] {
   align-items: end;
   gap: 12px;
   margin: 14px 0;
+}
+
+#contentSiteSelect[multiple] {
+  min-height: 118px;
+  padding: 8px;
+}
+
+#contentSiteSelect[multiple] option {
+  padding: 8px 10px;
+  border-radius: 10px;
 }
 
 .content-rule-check {
@@ -2235,6 +2333,214 @@ input[type="checkbox"] {
   gap: 14px;
 }
 
+.agent-control-board {
+  display: grid;
+  gap: 18px;
+}
+
+.agent-board-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 18px;
+  padding: 22px;
+  border: 1px solid rgba(47, 118, 104, 0.16);
+  border-radius: 26px;
+  background:
+    radial-gradient(circle at 12% 18%, rgba(47, 118, 104, 0.12), transparent 30%),
+    linear-gradient(135deg, rgba(255, 251, 241, 0.96), rgba(239, 230, 207, 0.72));
+}
+
+.agent-board-head h4,
+.agent-decision-card h4 {
+  margin: 4px 0 8px;
+  color: var(--sage-deep);
+  font-family: var(--font-display);
+  font-size: clamp(1.65rem, 2.3vw, 2.6rem);
+  line-height: 1.05;
+}
+
+.agent-board-head span {
+  color: var(--ink-soft);
+  line-height: 1.65;
+}
+
+.agent-board-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.agent-ready-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.agent-command-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+}
+
+.agent-decision-card {
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid rgba(39, 60, 49, 0.12);
+  border-radius: 24px;
+  background:
+    linear-gradient(135deg, rgba(255, 253, 245, 0.96), rgba(240, 232, 209, 0.55)),
+    rgba(255, 251, 241, 0.8);
+}
+
+.agent-decision-list {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-decision-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.6fr) auto minmax(0, 1.4fr);
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(39, 60, 49, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 253, 245, 0.76);
+}
+
+.agent-decision-row strong,
+.agent-check strong {
+  color: var(--sage-deep);
+  font-weight: 950;
+}
+
+.agent-decision-row span {
+  min-width: 52px;
+  padding: 8px 10px;
+  color: #fff7e8;
+  text-align: center;
+  border-radius: 999px;
+  background: var(--copper-deep);
+  font-weight: 950;
+}
+
+.agent-decision-row em,
+.agent-check em,
+.agent-small-note {
+  color: var(--ink-soft);
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.agent-small-note {
+  margin: 14px 0 0;
+  font-size: 0.9rem;
+}
+
+.agent-evidence-grid {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.agent-evidence-card {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(39, 60, 49, 0.1);
+  border-radius: 18px;
+  background: rgba(248, 243, 229, 0.56);
+}
+
+.agent-evidence-head,
+.agent-evidence-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+}
+
+.agent-evidence-head strong,
+.agent-evidence-row strong {
+  color: var(--sage-deep);
+  font-weight: 950;
+}
+
+.agent-evidence-head span,
+.agent-evidence-row > span {
+  padding: 5px 8px;
+  color: var(--copper-deep);
+  border-radius: 999px;
+  background: rgba(180, 111, 66, 0.12);
+  font-size: 0.76rem;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.agent-evidence-row {
+  padding-top: 8px;
+  border-top: 1px solid rgba(39, 60, 49, 0.08);
+}
+
+.agent-evidence-row em,
+.agent-evidence-row p,
+.agent-empty-note {
+  display: block;
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-style: normal;
+  line-height: 1.5;
+}
+
+.agent-evidence-row p {
+  grid-column: 1 / -1;
+  font-size: 0.86rem;
+}
+
+.agent-empty-note {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.agent-checklist {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.agent-check {
+  display: grid;
+  grid-template-columns: auto minmax(0, 0.7fr);
+  gap: 6px 10px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(39, 60, 49, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 253, 245, 0.76);
+}
+
+.agent-check span {
+  grid-row: span 2;
+  min-width: 48px;
+  padding: 7px 9px;
+  color: #fff7e8;
+  text-align: center;
+  border-radius: 999px;
+  background: #8a8275;
+  font-size: 0.72rem;
+  font-weight: 950;
+}
+
+.agent-check.is-ready span {
+  background: #2f7668;
+}
+
+.agent-check.is-missing span {
+  background: #b46b45;
+}
+
 .global-brain-controls {
   display: grid;
   grid-template-columns: minmax(260px, 1fr) minmax(300px, 1.2fr);
@@ -2923,8 +3229,16 @@ input[type="checkbox"] {
 
   .global-brain-controls,
   .serpapi-grid,
-  .global-brain-scope-strip {
+  .global-brain-scope-strip,
+  .agent-board-head,
+  .agent-command-grid,
+  .agent-task-card {
     grid-template-columns: 1fr;
+  }
+
+  .agent-board-actions,
+  .agent-queue-actions {
+    justify-content: flex-start;
   }
 
   .serpapi-actions {
@@ -2956,6 +3270,10 @@ input[type="checkbox"] {
   }
 
   .review-report-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .agent-ready-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
@@ -3033,8 +3351,20 @@ input[type="checkbox"] {
   .review-data-grid.compact,
   .review-report-metrics,
   .global-brain-metrics,
+  .agent-ready-grid,
+  .agent-checklist,
   .review-source-strip {
     grid-template-columns: 1fr;
+  }
+
+  .agent-decision-row,
+  .agent-check {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-check span {
+    grid-row: auto;
+    width: max-content;
   }
 
   .review-data-grid .review-wide-field {

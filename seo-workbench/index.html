@@ -20,25 +20,19 @@
         <nav class="page-nav" aria-label="Workbench pages">
           <a href="/page-setup" data-page-target="setup">项目设置</a>
           <a href="/page-keywords" data-page-target="keywords">关键词池</a>
-          <a href="/page-intelligence" data-page-target="intelligence">内容中枢</a>
-          <a href="/page-global-brain" data-page-target="globalBrain">全局大脑</a>
+          <a href="/page-agent" data-page-target="agent">今日 Agent</a>
           <a href="/page-review" data-page-target="review">复盘数据</a>
-          <a href="/page-production" data-page-target="production">生产</a>
-          <a href="/page-publishing" data-page-target="publishing">发布</a>
-          <a href="/page-todos" data-page-target="todos">待办</a>
+          <a href="/page-publishing" data-page-target="publishing">发布配置</a>
         </nav>
 
         <nav class="step-nav">
-          <a href="#project">01 网站定位</a>
-          <a href="#database">02 数据库</a>
-          <a href="#standard">03 标准配置</a>
-          <a href="#keywords">03 关键词导入</a>
-          <a href="#allocation">04 分站评分</a>
-          <a href="#brief">05 Brief 规划</a>
-          <a href="#ai-stages">06 AI 阶段路由</a>
-          <a href="#generation">07 内容生成</a>
-          <a href="#exports">08 导出交付</a>
-          <a href="#todos">09 待做清单</a>
+          <a href="#project">01 项目与数据</a>
+          <a href="#standard">02 SEO 标准</a>
+          <a href="#keywords">03 关键词池</a>
+          <a href="#global-brain">04 Agent 大脑</a>
+          <a href="#content-hub">05 队列执行</a>
+          <a href="#review-data">06 复盘数据</a>
+          <a href="#exports">07 发布配置</a>
         </nav>
 
         <div class="sidebar-note">
@@ -51,9 +45,9 @@
         <section class="hero">
           <div>
             <p class="eyebrow">Google SEO Method System</p>
-            <h2>把 Semrush 关键词变成页面、博客、Brief 和可接入 AI 的生产流程</h2>
+            <h2>用今日 Agent 把关键词、文章库存和复盘数据变成可执行任务</h2>
             <p class="hero-copy">
-              这不是单纯写文章的页面，而是一套可迭代的 SEO 工作流：导入真实关键词表，读取标准配置，完成分词评分，生成 Brief，再按阶段选择不同 AI API。
+              用户只需要配置项目、导入关键词、运行今日 Agent、审核队列和发布结果。关键词分站、文章库存读取、机会池复核、Brief、SERP 校验和生成都尽量交给系统自动衔接。
             </p>
           </div>
           <div class="hero-actions">
@@ -504,22 +498,21 @@
         <section class="panel" id="content-hub">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">Content Intelligence</p>
-              <h3>站点内容中枢</h3>
+              <p class="eyebrow">Daily Agent Queue</p>
+              <h3>今日任务队列</h3>
             </div>
             <div class="button-row">
-              <button class="soft-btn" id="loadContentSitePostsBtn">读取/刷新文章</button>
-              <button class="soft-btn" id="planContentOpportunitiesBtn">AI 复核并生成机会池</button>
-              <button class="soft-btn" id="selectTopOpportunitiesBtn">按数量勾选优先词</button>
-              <button class="ghost-btn" id="clearOpportunitySelectionBtn">清空勾选</button>
-              <button class="soft-btn" id="createAgentQueueBtn">创建 Agent 队列</button>
-              <button class="primary-btn" id="runAgentQueueBtn">执行 Agent 队列</button>
-              <button class="primary-btn" id="batchGenerateSelectedBtn">批量生成勾选文章</button>
+              <button class="soft-btn legacy-action" id="loadContentSitePostsBtn">读取/刷新文章</button>
+              <button class="soft-btn legacy-action" id="planContentOpportunitiesBtn">AI 复核并生成机会池</button>
+              <button class="soft-btn legacy-action" id="selectTopOpportunitiesBtn">按数量勾选优先词</button>
+              <button class="ghost-btn legacy-action" id="clearOpportunitySelectionBtn">清空勾选</button>
+              <button class="soft-btn legacy-action" id="createAgentQueueBtn">创建 Agent 队列</button>
+              <button class="primary-btn legacy-action" id="batchGenerateSelectedBtn">批量生成勾选文章</button>
             </div>
           </div>
 
           <div class="helper-copy">
-            这里才是站点级 AI 判断的主工作区：把“站点已有文章”和“Semrush 关键词池”合在一起分析，先看哪些关键词已经覆盖、哪些主题缺口最值得写，再为新文章规划同站内链。当前默认规则是：非主站文章只做本站内链，不给主站或产品页外链。
+            这里不再展示所有中间分析表，只保留自动发布前必须确认的内容：目标站点、今日数量、外链策略和 Agent 队列。先运行今日 Agent，确认队列后再批准生成/发布。
           </div>
 
           <datalist id="siteMarketOptions">
@@ -568,13 +561,13 @@
 
           <div class="content-hub-controls">
             <label>
-              选择要分析的站点
+              目标发布站点（可多选）
               <select id="contentSiteSelect">
                 <option value="">请选择站点</option>
               </select>
             </label>
             <label>
-              今天要生成几篇
+              今日发布数量
               <input id="batchGenerateCountInput" type="number" min="1" max="50" value="3" />
             </label>
             <label class="checkbox-field content-rule-check">
@@ -587,7 +580,7 @@
             </label>
           </div>
 
-          <article class="bulk-publish-panel">
+          <article class="bulk-publish-panel legacy-action">
             <div class="bulk-publish-head">
               <div>
                 <p class="eyebrow">Batch Publishing</p>
@@ -632,6 +625,7 @@
                   <input id="agentAutoUploadInput" type="checkbox" checked />
                   生成后自动导入当前站点
                 </label>
+                <button class="primary-btn" id="runAgentQueueBtn">批准并生成/发布</button>
                 <button class="ghost-btn" id="clearAgentQueueBtn">清空队列</button>
               </div>
             </div>
@@ -687,15 +681,16 @@
         <section class="panel" id="global-brain">
           <div class="review-hero global-brain-hero">
             <div class="review-hero-copy">
-              <p class="eyebrow">Global SEO Brain</p>
-              <h3>全局大脑看板</h3>
+              <p class="eyebrow">Daily SEO Agent</p>
+              <h3>今日 Agent 控制台</h3>
               <p>
-                这里不负责单篇文章，而是把主站、博客站群、产品资产、关键词池、GSC/GA4 复盘数据放在同一个脑图里，判断系统下一步应该写什么、更新什么、补什么内链、哪些数据还缺。
+                这里是低点击主流程：读取当前市场数据，生成今日任务队列，再由你确认后执行。系统会尽量自动串起文章库存、关键词机会、SERP 校验、Brief 和文章生成。
               </p>
             </div>
             <div class="review-hero-actions">
+              <button class="primary-btn" id="runTodayAgentBtn">运行今日 Agent</button>
               <button class="soft-btn" id="refreshGlobalBrainBtn">按当前市场刷新看板</button>
-              <button class="primary-btn" id="buildGlobalTasksBtn">生成本地任务池</button>
+              <button class="soft-btn" id="buildGlobalTasksBtn">查看任务池草案</button>
             </div>
           </div>
 
@@ -710,7 +705,7 @@
             </label>
           </div>
 
-          <details class="site-api-details serpapi-panel" open>
+          <details class="site-api-details serpapi-panel">
             <summary>SERP API 数据源：用于校验 Google 前 10、PAA、相关搜索和页面类型</summary>
             <div class="serpapi-grid">
               <label>
