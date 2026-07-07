@@ -26,6 +26,7 @@ const defaultPort = Number(process.env.PORT || 5177);
 const appRoutePaths = new Set([
   "/page-setup",
   "/page-keywords",
+  "/page-agent",
   "/page-intelligence",
   "/page-global-brain",
   "/page-review",

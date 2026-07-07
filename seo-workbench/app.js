@@ -134,6 +134,7 @@ const state = {
   contentHub: {
     source: "blog",
     selectedSiteKey: "",
+    selectedSiteKeys: [],
     posts: [],
     opportunities: [],
     selectedIds: [],
@@ -184,28 +185,38 @@ function escapeHtml(value) {
 const PAGE_CONFIG = {
   setup: ["project", "database", "standard", "ai-stages"],
   keywords: ["keywords", "allocation"],
-  intelligence: ["content-hub"],
-  globalBrain: ["global-brain"],
+  agent: ["global-brain", "content-hub"],
   review: ["review-data"],
-  production: ["brief", "generation"],
   publishing: ["exports"],
-  todos: ["todos"],
 };
 
 const PAGE_ROUTES = {
   "/": "setup",
   "/page-setup": "setup",
   "/page-keywords": "keywords",
-  "/page-intelligence": "intelligence",
-  "/page-global-brain": "globalBrain",
+  "/page-agent": "agent",
+  "/page-intelligence": "agent",
+  "/page-global-brain": "agent",
   "/page-review": "review",
-  "/page-production": "production",
+  "/page-production": "agent",
   "/page-publishing": "publishing",
-  "/page-todos": "todos",
 };
 
+const PAGE_ALIASES = {
+  intelligence: "agent",
+  globalBrain: "agent",
+  "global-brain": "agent",
+  production: "agent",
+  todos: "setup",
+};
+
+function normalizePageKey(page = "setup") {
+  return PAGE_ALIASES[page] || page || "setup";
+}
+
 function routeForPage(page = "setup") {
-  return Object.entries(PAGE_ROUTES).find(([, value]) => value === page && value !== "setup")?.[0] || "/page-setup";
+  const normalized = normalizePageKey(page);
+  return Object.entries(PAGE_ROUTES).find(([, value]) => value === normalized && value !== "setup")?.[0] || "/page-setup";
 }
 
 function pageForSection(sectionId = "") {
@@ -213,7 +224,8 @@ function pageForSection(sectionId = "") {
 }
 
 function applyActivePage(page = state.activePage) {
-  const nextPage = PAGE_CONFIG[page] ? page : "setup";
+  const normalizedPage = normalizePageKey(page);
+  const nextPage = PAGE_CONFIG[normalizedPage] ? normalizedPage : "setup";
   state.activePage = nextPage;
   document.body.dataset.page = nextPage;
 
@@ -1356,8 +1368,10 @@ function projectCompletenessHint(project = readProject()) {
 }
 
 function serializableContentHubDraft() {
+  const { agentQueueRunning, ...contentHub } = state.contentHub;
   return {
-    ...state.contentHub,
+    ...contentHub,
+    agentQueueRunning: false,
     generatedArticles: (state.contentHub.generatedArticles || []).map(({ content, ...article }) => article),
   };
 }
@@ -1453,11 +1467,30 @@ function restoreWorkspaceDraft() {
       state.contentHub = {
         ...state.contentHub,
         ...draft.contentHub,
+        selectedSiteKeys: Array.isArray(draft.contentHub.selectedSiteKeys)
+          ? draft.contentHub.selectedSiteKeys
+          : draft.contentHub.selectedSiteKey
+            ? [draft.contentHub.selectedSiteKey]
+            : [],
         posts: Array.isArray(draft.contentHub.posts) ? draft.contentHub.posts : [],
         opportunities: Array.isArray(draft.contentHub.opportunities) ? draft.contentHub.opportunities : [],
         selectedIds: Array.isArray(draft.contentHub.selectedIds) ? draft.contentHub.selectedIds : [],
         generatedArticles: Array.isArray(draft.contentHub.generatedArticles) ? draft.contentHub.generatedArticles : [],
-        agentQueue: Array.isArray(draft.contentHub.agentQueue) ? draft.contentHub.agentQueue : [],
+        agentQueue: Array.isArray(draft.contentHub.agentQueue)
+          ? draft.contentHub.agentQueue.map((task) =>
+              ["running", "serp_ready"].includes(task.status)
+                ? {
+                    ...task,
+                    status: "failed",
+                    step: "上次运行中断",
+                    message: "页面刷新或服务重启导致任务中断，可重新执行或清空队列。",
+                    error: task.error || "运行态不会被恢复，避免按钮锁死。",
+                    updatedAt: new Date().toISOString(),
+                  }
+                : task,
+            )
+          : [],
+        agentQueueRunning: false,
         agentAutoUpload: draft.contentHub.agentAutoUpload !== false,
       };
     }
@@ -1827,9 +1860,6 @@ function renderPostInventory(containerId, posts = [], source = "wp", context = "
             <strong>${escapeHtml(post.title || "Untitled")}</strong>
             <span class="asset-path">${escapeHtml(post.slug || post.link || "")}</span>
           </td>
-          <td>${escapeHtml(post.status || "")}</td>
-          <td>${escapeHtml(post.wordApprox || 0)}</td>
-          <td>${escapeHtml(String(post.modified || post.date || "").slice(0, 10))}</td>
           <td><button class="ghost-btn" data-optimize-post="${escapeHtml(post.id || post.slug || "")}" data-source="${escapeHtml(source)}" data-context="${escapeHtml(context)}">分析/优化</button></td>
         </tr>
       `,
@@ -1848,9 +1878,6 @@ function renderPostInventory(containerId, posts = [], source = "wp", context = "
             <tr>
               <th>ID</th>
               <th>标题 / URL</th>
-              <th>状态</th>
-              <th>词数估算</th>
-              <th>更新</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -2079,8 +2106,37 @@ function parseContentSiteKey(siteKey = state.contentHub.selectedSiteKey) {
   return { type: type || "", id: rest.join(":") };
 }
 
+function selectedContentSiteKeys() {
+  const keys = Array.isArray(state.contentHub.selectedSiteKeys)
+    ? state.contentHub.selectedSiteKeys.filter(Boolean)
+    : [];
+  if (!keys.length && state.contentHub.selectedSiteKey) return [state.contentHub.selectedSiteKey];
+  return Array.from(new Set(keys));
+}
+
+function selectedContentSites() {
+  const options = contentSiteOptions();
+  const selectedKeys = new Set(selectedContentSiteKeys());
+  return options.filter((site) => selectedKeys.has(site.key));
+}
+
 function selectedContentSite() {
-  return contentSiteOptions().find((site) => site.key === state.contentHub.selectedSiteKey) || null;
+  return contentSiteOptions().find((site) => site.key === state.contentHub.selectedSiteKey) || selectedContentSites()[0] || null;
+}
+
+function contentSiteByKey(siteKey = "") {
+  return allContentSiteOptions().find((site) => site.key === siteKey) || null;
+}
+
+function activateContentSiteForAgent(siteKey = "") {
+  const site = contentSiteByKey(siteKey);
+  if (!site) return null;
+  state.contentHub.selectedSiteKey = site.key;
+  state.contentHub.source = site.type;
+  if (!selectedContentSiteKeys().includes(site.key)) {
+    state.contentHub.selectedSiteKeys = [...selectedContentSiteKeys(), site.key];
+  }
+  return site;
 }
 
 function contentSourceLabel(site = selectedContentSite()) {
@@ -2227,7 +2283,7 @@ function buildContentOpportunity(item = {}, source = contentSourceType(), posts 
     : "可按文章目的选择主站/产品页承接";
 
   return {
-    id: `opp-${source}-${item.id}`,
+    id: `opp-${site?.key || source}-${item.id}`,
     keywordId: item.id,
     keyword: item.keyword,
     topicCluster: item.topicCluster || item.pageGroup || item.seedKeyword || item.keyword,
@@ -2266,20 +2322,21 @@ function renderContentSiteOptions() {
   const select = $("contentSiteSelect");
   if (!select) return;
   const options = contentSiteOptions();
-  select.innerHTML = [
-    `<option value="">请选择要分析的站点</option>`,
-    ...options.map((site) => {
+  const selectedKeys = new Set(selectedContentSiteKeys());
+  select.multiple = true;
+  select.size = Math.min(8, Math.max(3, options.length || 3));
+  select.innerHTML = options.length
+    ? options.map((site) => {
       const profile = site.profile || inferSiteProfile(site);
       const localeText = profile.targetMarket || profile.targetLanguage || "未配置市场";
       const suffix = site.compatible ? "" : ` / 不匹配：${site.incompatibleReason}`;
-      return `<option value="${escapeHtml(site.key)}">${escapeHtml(`${site.name}｜${profile.contentRole}｜${localeText}${suffix}`)}</option>`;
-    }),
-  ].join("");
-  if (options.some((site) => site.key === state.contentHub.selectedSiteKey)) {
-    select.value = state.contentHub.selectedSiteKey;
-  } else {
-    select.value = "";
-  }
+      const selected = selectedKeys.has(site.key) ? " selected" : "";
+      return `<option value="${escapeHtml(site.key)}"${selected}>${escapeHtml(`${site.name}｜${profile.contentRole || "未配置板块"}｜${localeText}${suffix}`)}</option>`;
+    }).join("")
+    : `<option value="">请先在发布配置里添加站点</option>`;
+  const validKeys = new Set(options.map((site) => site.key));
+  state.contentHub.selectedSiteKeys = selectedContentSiteKeys().filter((key) => validKeys.has(key));
+  state.contentHub.selectedSiteKey = state.contentHub.selectedSiteKeys[0] || "";
 }
 
 async function loadContentHubSitePosts({ autoPlan = true, force = false } = {}) {
@@ -2663,8 +2720,10 @@ function renderContentHub() {
   $("contentNoMainLinksInput").checked = Boolean(state.contentHub.noMainOutboundLinks);
 
   let site = selectedContentSite();
-  if (!site && state.contentHub.selectedSiteKey && !state.contentHub.showIncompatibleSites) {
+  const selectedSites = selectedContentSites();
+  if (!selectedSites.length && selectedContentSiteKeys().length && !state.contentHub.showIncompatibleSites) {
     state.contentHub.selectedSiteKey = "";
+    state.contentHub.selectedSiteKeys = [];
     state.contentHub.posts = [];
     state.contentHub.opportunities = [];
     state.contentHub.selectedIds = [];
@@ -2683,9 +2742,10 @@ function renderContentHub() {
   const selectedSet = new Set(state.contentHub.selectedIds || []);
   const topReady = opportunities.filter((item) => selectedSet.has(item.id));
   $("contentHubSummary").innerHTML = [
-    ["当前站点", site?.name || "未选择"],
-    ["市场 / 语种", profile ? `${profile.targetMarket || "未配置"} / ${profile.targetLanguage || "未配置"}` : "未选择"],
-    ["负责板块", profile?.contentRole || "未选择"],
+    ["目标站点", selectedSites.length ? selectedSites.map((item) => item.name).join(" / ") : "未选择"],
+    ["站点数量", `${selectedSites.length} 个`],
+    ["默认站点", site?.name || "未选择"],
+    ["默认市场 / 语种", profile ? `${profile.targetMarket || "未配置"} / ${profile.targetLanguage || "未配置"}` : "未选择"],
     ["文章库存", `${posts.length} 篇`],
     ["关键词池", `${state.keywords.length} 个`],
     ["可写机会", `${opportunities.filter((item) => item.action === "新写文章").length} 个`],
@@ -2801,8 +2861,8 @@ async function useContentOpportunity(opportunityId) {
   if (!opportunity) throw new Error("没有找到这个内容机会。");
   state.contentHub.activeOpportunity = opportunity;
   state.selectedId = opportunity.keywordId;
-  applyActivePage("production");
-  history.replaceState(null, "", "/page-production#generation");
+  applyActivePage("agent");
+  history.replaceState(null, "", "/page-agent#generation");
   await refreshSelected();
   document.getElementById("generation")?.scrollIntoView({ block: "start" });
 }
@@ -4209,9 +4269,9 @@ function selectedContentAgentOpportunities() {
 }
 
 function createContentAgentQueueFromSelected() {
-  const site = selectedContentSite();
-  if (!site) {
-    $("contentHubStatus").textContent = "请先选择本次要执行的站点。";
+  const selectedSitesByKey = new Map([...contentSiteOptions(), ...allContentSiteOptions()].map((site) => [site.key, site]));
+  if (!selectedSitesByKey.size) {
+    $("contentHubStatus").textContent = "请先添加并选择本次要执行的站点。";
     return [];
   }
 
@@ -4228,11 +4288,21 @@ function createContentAgentQueueFromSelected() {
     keywordId: opportunity.keywordId,
     keyword: opportunity.keyword,
     topicCluster: opportunity.topicCluster || "",
-    siteKey: site.key,
-    siteName: site.name,
+    siteKey: opportunity.siteKey || state.contentHub.selectedSiteKey,
+    siteName: opportunity.siteName || selectedSitesByKey.get(opportunity.siteKey)?.name || contentSourceLabel(),
     planningDecision: opportunity.planningDecision || "",
     priority: opportunity.priority || "",
     score: opportunity.score || 0,
+    coverage: opportunity.coverage || "",
+    action: opportunity.action || "",
+    reason: opportunity.reason || "",
+    aiReviewed: Boolean(opportunity.aiReviewed),
+    aiDecision: opportunity.aiDecision || "",
+    aiReason: opportunity.aiReason || "",
+    contentAngle: opportunity.contentAngle || "",
+    nextAction: opportunity.nextAction || "",
+    matchedPostCount: Array.isArray(opportunity.matchedPosts) ? opportunity.matchedPosts.length : 0,
+    internalLinkCount: Array.isArray(opportunity.internalLinks) ? opportunity.internalLinks.length : 0,
     status: "queued",
     step: "等待执行",
     message: opportunity.nextAction || "等待 Agent 按标准执行 SERP、Brief、Prompt 和文章生成。",
@@ -4255,11 +4325,13 @@ function createContentAgentQueueFromSelected() {
 
 function clearContentAgentQueue() {
   if (state.contentHub.agentQueueRunning) {
-    $("contentHubStatus").textContent = "Agent 正在执行中，暂时不能清空队列。";
-    return;
+    const confirmed = confirmAction("当前队列状态显示正在执行。要强制停止并清空队列吗？如果只是历史状态卡住，建议确认清空。");
+    if (!confirmed) return;
+    state.contentHub.agentQueueRunning = false;
   }
   state.contentHub.agentQueue = [];
   state.contentHub.agentQueueBatchId = "";
+  state.contentHub.activeOpportunity = null;
   renderContentAgentQueue();
   updateActionStates();
   saveWorkspaceDraft("已清空 Agent 任务队列。");
@@ -4272,6 +4344,12 @@ function renderContentAgentQueue() {
   if ($("agentAutoUploadInput")) $("agentAutoUploadInput").checked = state.contentHub.agentAutoUpload !== false;
   const queue = state.contentHub.agentQueue || [];
   const stats = agentQueueStats(queue);
+  const stage = state.aiStages.keywordAnalysis || {};
+  const aiMode = stage.provider === "local" || stage.apiFormat === "local"
+    ? "不调用 AI，仅用本地规则"
+    : `会调用 ${stage.provider || "AI"} / ${stage.model || "未配置模型"} 复核机会池`;
+  const standardVersion = state.standard?.version || "unknown";
+  const dailyCapacity = state.standard?.globalPlanning?.capacityRules?.dailyNewArticlesDefault || 3;
   summary.innerHTML = [
     ["任务总数", stats.total],
     ["待执行", stats.queued],
@@ -4284,30 +4362,72 @@ function renderContentAgentQueue() {
     .join("");
 
   if (!queue.length) {
-    list.innerHTML = `<div class="agent-empty">还没有 Agent 任务。先在机会池勾选关键词，再点击“创建 Agent 队列”。</div>`;
+    list.innerHTML = `
+      <div class="agent-rationale-panel">
+        <h5>一键准备队列会做什么？</h5>
+        <p>读取当前市场的站点文章库存，按 <code>workflows/seo-standard.json</code> 的规则生成机会池，再按日产能和分数选择候选任务。${escapeHtml(aiMode)}。</p>
+      </div>
+      <div class="agent-empty">还没有 Agent 任务。点击上方“运行今日 Agent”，系统会自动准备队列；你再审核后执行。</div>
+    `;
     return;
   }
 
+  const rationaleRows = queue.slice(0, 8).map((task) => [
+    task.keyword,
+    task.coverage || "未记录",
+    task.score || 0,
+    task.aiReviewed ? "已 AI 复核" : "本地规则",
+    task.aiReason || task.reason || task.message || "",
+  ]);
+
   list.innerHTML = queue
+    ? `
+      <div class="agent-rationale-panel">
+        <h5>队列选择依据</h5>
+        <p>
+          标准文件：<code>workflows/seo-standard.json</code> v${escapeHtml(standardVersion)}。
+          流程：文章库存覆盖判断 → 站点角色/市场匹配 → 本地评分排序 → ${escapeHtml(aiMode)} → 选取前 ${escapeHtml(dailyCapacity)} 个“未覆盖 + 新写文章”机会。
+          这里的“审核队列”就是由你确认这些任务是否值得执行。
+        </p>
+        ${reportDataTable(["关键词", "覆盖情况", "分数", "复核方式", "为什么入队"], rationaleRows)}
+      </div>
+    `
+    : "";
+
+  list.innerHTML += queue
     .map((task) => `
       <article class="agent-task-card ${escapeHtml(task.status)}">
         <div class="agent-task-main">
           <span class="agent-status ${escapeHtml(task.status)}">${escapeHtml(agentStatusLabel(task.status))}</span>
           <div>
             <strong>${escapeHtml(task.keyword)}</strong>
-            <p>${escapeHtml(task.siteName || "")} · ${escapeHtml(task.priority || "未定")} · ${escapeHtml(task.planningDecision || "未定决策")} · ${escapeHtml(String(task.score || 0))} 分</p>
+            <p>${escapeHtml(task.siteName || "")} · ${escapeHtml(task.priority || "未定")} · ${escapeHtml(task.planningDecision || task.action || "未定决策")} · ${escapeHtml(String(task.score || 0))} 分</p>
           </div>
         </div>
         <div class="agent-task-step">
           <strong>${escapeHtml(task.step || "等待执行")}</strong>
+          <span>入队依据：${escapeHtml(task.reason || "按本地规则与分数排序入队。")}</span>
+          ${task.aiReason ? `<span>AI 复核：${escapeHtml(task.aiReason)}</span>` : ""}
+          ${task.coverage ? `<span>覆盖情况：${escapeHtml(task.coverage)}；可用内链：${escapeHtml(task.internalLinkCount || 0)} 条</span>` : ""}
           <span>${escapeHtml(task.message || "")}</span>
           ${task.requiredData?.length ? `<span>缺数据：${escapeHtml(task.requiredData.join(" / "))}</span>` : ""}
           ${task.savedPath ? `<span>保存位置：${escapeHtml(task.savedPath)}</span>` : ""}
           ${task.error ? `<span class="agent-error">错误：${escapeHtml(task.error)}</span>` : ""}
+          ${["queued", "failed"].includes(task.status) ? `<button class="ghost-btn agent-remove-task" data-remove-agent-task="${escapeHtml(task.id)}">移出队列</button>` : ""}
         </div>
       </article>
     `)
     .join("");
+
+  list.querySelectorAll("[data-remove-agent-task]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const taskId = button.dataset.removeAgentTask;
+      state.contentHub.agentQueue = (state.contentHub.agentQueue || []).filter((task) => task.id !== taskId);
+      renderContentAgentQueue();
+      updateActionStates();
+      saveWorkspaceDraft("已从 Agent 队列移除一条任务。");
+    });
+  });
 }
 
 function bulkPublishSiteOptions() {
@@ -4577,6 +4697,9 @@ function updateActionStates() {
   setActionEnabled("downloadStandardBtn", Boolean(state.standard), "SEO 标准还没有载入。");
   setActionEnabled("saveSerpApiConfigBtn", true);
   setActionEnabled("testSerpApiBtn", Boolean(state.serpApiConfig?.enabled), "先保存 SerpApi API Key。");
+  setActionEnabled("runTodayAgentBtn", Boolean(hasKeywords && !state.contentHub.agentQueueRunning), "先导入关键词池，再运行今日 Agent。");
+  setActionEnabled("refreshGlobalBrainBtn", !state.contentHub.agentQueueRunning, "Agent 队列执行中，先等待当前任务结束。");
+  setActionEnabled("buildGlobalTasksBtn", true);
 
   setActionEnabled("copyBriefBtn", hasBrief, "先在关键词池选择一个关键词生成 Brief。");
   setActionEnabled("buildPromptBtn", hasSelectedKeyword, "先在关键词池或内容中枢选择一个关键词。");
@@ -4592,7 +4715,7 @@ function updateActionStates() {
   setActionEnabled("clearOpportunitySelectionBtn", selectedOpportunityCount > 0, "当前没有勾选机会。");
   setActionEnabled("createAgentQueueBtn", selectedOpportunityCount > 0 && !state.contentHub.agentQueueRunning, "先在内容机会池勾选要加入队列的关键词。");
   setActionEnabled("runAgentQueueBtn", agentQueueCount > 0 && runnableAgentTasks > 0 && !state.contentHub.agentQueueRunning, "先创建 Agent 队列，或当前队列已全部完成。");
-  setActionEnabled("clearAgentQueueBtn", agentQueueCount > 0 && !state.contentHub.agentQueueRunning, "当前没有可清空的 Agent 队列。");
+  setActionEnabled("clearAgentQueueBtn", agentQueueCount > 0, "当前没有可清空的 Agent 队列。");
   setActionEnabled("batchGenerateSelectedBtn", selectedOpportunityCount > 0, "先在内容机会池勾选要生成的关键词。");
   setActionEnabled("batchUploadGeneratedBtn", Boolean(contentSite && generatedForSite.length), "先为当前站点批量生成文章。");
   setActionEnabled("saveCurrentBulkPlanBtn", Boolean(contentSite && ["blog", "wp"].includes(contentSite.type)), "先载入一个 WordPress 或自建博客站点。");
@@ -5374,6 +5497,209 @@ function renderGlobalBrain() {
   const planning = globalPlanningStandard();
   const planningThresholds = planning.scoring?.thresholds || {};
   const planningCapacity = planning.capacityRules || {};
+  const project = readProject();
+  const aiStage = state.aiStages?.keywordAnalysis || {};
+  const aiMode = aiStage.enabled
+    ? `${aiStage.provider || "AI"} / ${aiStage.model || "default"}`
+    : "本地规则初筛，必要时再人工复核";
+  const dailyTarget = Math.max(1, Number($("batchGenerateCountInput")?.value || planningCapacity.dailyNewArticlesDefault || 3));
+  const newOpportunities = opportunities.filter((item) => {
+    const action = `${item.action || ""} ${item.contentAction || ""} ${item.nextAction || ""} ${item.planningDecision || ""}`.toLowerCase();
+    const coverage = `${item.coverage || ""}`;
+    return (/write|create|new_article|新写|新增/.test(action) || coverage.includes("未覆盖")) && !/update|优化|更新/.test(action);
+  });
+  const updateOpportunities = opportunities.filter((item) => {
+    const action = `${item.action || ""} ${item.contentAction || ""} ${item.nextAction || ""} ${item.planningDecision || ""}`.toLowerCase();
+    return /update|refresh|update_article|merge_or_redirect|优化|更新|补充|合并/.test(action);
+  });
+  const holdKeywords = keywords.filter((item) => {
+    const site = `${item.assignedSite || item.finalSite || ""}`;
+    const action = `${item.action || item.contentAction || ""}`;
+    return site.includes("暂不做") || /hold|skip|暂不做|不做/.test(action);
+  });
+  const needHumanCheck = opportunities.filter((item) => {
+    const decision = `${item.aiDecision || ""}`.toLowerCase();
+    return item.needsSerpCheck || ["hold", "revise", "review"].includes(decision);
+  }).length;
+  const readinessItems = [
+    ["项目定位", Boolean(project.domain && (project.coreProducts || project.mainPages)), project.domain || "未填写主站域名"],
+    ["关键词池", keywords.length > 0, `${formatNumber(keywords.length)} 个当前市场关键词`],
+    ["文章库存", posts.length > 0, `${formatNumber(posts.length)} 篇已读取文章`],
+    ["产品资产", products.length > 0, `${formatNumber(products.length)} 个承接资产`],
+    ["SERP 校验", hasSerpData, hasSerpData ? `${state.serpData?.query || "已缓存"} / gl=${state.serpData?.gl || "-"}` : "生成前建议拉取目标词 SERP"],
+    ["GSC/GA4 复盘", Boolean(review), review ? "已缓存真实表现数据" : "可后续按月接入复盘"],
+  ];
+  const decisionRows = [
+    ["今日建议新写", Math.min(dailyTarget, newOpportunities.length), "优先选未覆盖、P0/P1、站点角色匹配的关键词"],
+    ["建议更新旧文", updateOpportunities.length, "已有文章覆盖但内容薄、过期或需要补 FAQ/内链"],
+    ["先不做/待复核", holdKeywords.length + needHumanCheck, "市场不匹配、SERP 未校验、意图不稳或 AI 标记需要人工确认"],
+  ];
+  const evidenceSource = opportunities.some((item) => item.aiReviewed)
+    ? "本地规则 + AI 复核"
+    : opportunities.length
+      ? "本地规则"
+      : "尚未生成机会池";
+  const evidenceLimit = 5;
+  const normalizeDecisionText = (value = "") => String(value || "").replaceAll("_", " ");
+  const evidenceRow = (item = {}, fallbackType = "") => {
+    const matchedPost = Array.isArray(item.matchedPosts) ? item.matchedPosts[0] : null;
+    return {
+      keyword: item.keyword || "-",
+      site: item.siteName || item.assignedSite || "-",
+      target: matchedPost?.title || item.pageType || normalizeDecisionText(item.planningDecision) || fallbackType || "-",
+      score: Number(item.score || 0),
+      priority: item.priority || "-",
+      source: item.aiReviewed ? "AI 复核" : "本地规则",
+      reason: item.aiReason || item.reason || item.nextAction || item.serpFeatureNotes || "按覆盖情况、优先级、站点角色和本地评分入选。",
+    };
+  };
+  const decisionEvidenceGroups = [
+    {
+      title: "建议新写关键词",
+      empty: opportunities.length ? "当前没有达到新写条件的关键词。" : "先运行今日 Agent 生成机会池后，这里会列出具体关键词。",
+      items: newOpportunities.slice(0, evidenceLimit).map((item) => evidenceRow(item, "新文章")),
+    },
+    {
+      title: "建议更新旧文",
+      empty: opportunities.length ? "当前没有识别到需要更新的旧文。" : "先读取站点文章库存后，这里会列出要更新的旧文。",
+      items: updateOpportunities.slice(0, evidenceLimit).map((item) => evidenceRow(item, "旧文更新")),
+    },
+    {
+      title: "先不做 / 待复核",
+      empty: opportunities.length || holdKeywords.length ? "当前没有待复核项。" : "先导入关键词并运行 Agent 后，这里会列出暂不执行的原因。",
+      items: [
+        ...opportunities
+          .filter((item) => {
+            const decision = `${item.aiDecision || item.planningDecision || ""}`.toLowerCase();
+            const priority = `${item.priority || ""}`.toLowerCase();
+            return item.needsSerpCheck || ["hold", "revise", "review"].includes(decision) || priority === "hold";
+          })
+          .slice(0, evidenceLimit)
+          .map((item) => evidenceRow(item, "待复核")),
+        ...holdKeywords.slice(0, Math.max(0, evidenceLimit - needHumanCheck)).map((item) => ({
+          keyword: item.keyword || "-",
+          site: item.assignedSite || item.finalSite || "暂不做",
+          target: item.pageType || "暂不做",
+          score: Number(item.score || 0),
+          priority: item.priority || "Hold",
+          source: "关键词分站规则",
+          reason: item.reason || item.notes || "关键词分站结果标记为暂不做或需要人工复核。",
+        })),
+      ].slice(0, evidenceLimit),
+    },
+  ];
+
+  container.innerHTML = `
+    <section class="agent-control-board">
+      <div class="agent-board-head">
+        <div>
+          <p class="eyebrow">Agent Command Center</p>
+          <h4>今日自动发布看板</h4>
+          <span>只保留会影响执行的信号：数据是否齐、今天写几篇、为什么入队、是否可以生成并导入站点。</span>
+        </div>
+        <div class="agent-board-actions">
+          <button class="soft-btn" type="button" id="agentBoardDraftBtn">查看任务池草案</button>
+          <button class="primary-btn" type="button" id="agentBoardRunBtn">运行今日 Agent</button>
+        </div>
+      </div>
+
+      <div class="agent-ready-grid">
+        ${dashboardMetric("项目", project.domain ? "READY" : "MISSING", project.domain || "先填写主站域名", project.domain ? "#2f7668" : "#b46b45")}
+        ${dashboardMetric("关键词池", formatNumber(keywords.length), `${scopeLocale.rawMarket || "未选市场"} / P0-P1 ${formatNumber(p0p1)}`, "#101827")}
+        ${dashboardMetric("文章库存", formatNumber(posts.length), "用于去重、补旧文和规划内链", "#4f6ee8")}
+        ${dashboardMetric("产品资产", formatNumber(products.length), "主站商业承接页/产品", "#b57b2e")}
+        ${dashboardMetric("SERP", hasSerpData ? "READY" : "WAITING", hasSerpData ? "已有真实 SERP 快照" : "生成前建议校验", hasSerpData ? "#2f7668" : "#c46a2b")}
+        ${dashboardMetric("复盘数据", review ? "READY" : "LATER", review ? "GSC/GA4 已缓存" : "可按月补齐", review ? "#2f7668" : "#8a8275")}
+      </div>
+
+      <div class="agent-command-grid">
+        <article class="agent-decision-card">
+          <p class="eyebrow">Today Decision</p>
+          <h4>今日决策摘要</h4>
+          <div class="agent-decision-list">
+            ${decisionRows
+              .map(
+                ([label, count, note]) => `
+                  <div class="agent-decision-row">
+                    <strong>${escapeHtml(label)}</strong>
+                    <span>${formatNumber(count)}</span>
+                    <em>${escapeHtml(note)}</em>
+                  </div>
+                `,
+              )
+              .join("")}
+          </div>
+          <div class="agent-evidence-grid">
+            ${decisionEvidenceGroups
+              .map(
+                (group) => `
+                  <section class="agent-evidence-card">
+                    <div class="agent-evidence-head">
+                      <strong>${escapeHtml(group.title)}</strong>
+                      <span>${escapeHtml(group.items.length ? `${group.items.length} 条样例` : "暂无")}</span>
+                    </div>
+                    ${
+                      group.items.length
+                        ? group.items
+                            .map(
+                              (item) => `
+                                <div class="agent-evidence-row">
+                                  <div>
+                                    <strong>${escapeHtml(item.keyword)}</strong>
+                                    <em>${escapeHtml(item.site)} · ${escapeHtml(item.target)}</em>
+                                  </div>
+                                  <span>${escapeHtml(item.priority)} / ${escapeHtml(String(item.score))}</span>
+                                  <p>${escapeHtml(item.source)}：${escapeHtml(item.reason)}</p>
+                                </div>
+                              `,
+                            )
+                            .join("")
+                        : `<p class="agent-empty-note">${escapeHtml(group.empty)}</p>`
+                    }
+                  </section>
+                `,
+              )
+              .join("")}
+          </div>
+          <p class="agent-small-note">判断来源：${escapeHtml(evidenceSource)}。标准来源：<code>workflows/seo-standard.json</code> + 全局规划规则。AI 阶段：${escapeHtml(aiMode)}。</p>
+        </article>
+
+        <article class="agent-decision-card">
+          <p class="eyebrow">Data Gate</p>
+          <h4>执行前检查</h4>
+          <div class="agent-checklist">
+            ${readinessItems
+              .map(
+                ([label, ready, detail]) => `
+                  <div class="agent-check ${ready ? "is-ready" : "is-missing"}">
+                    <span>${ready ? "OK" : "TODO"}</span>
+                    <strong>${escapeHtml(label)}</strong>
+                    <em>${escapeHtml(detail)}</em>
+                  </div>
+                `,
+              )
+              .join("")}
+          </div>
+        </article>
+      </div>
+    </section>
+  `;
+  $("agentBoardRunBtn")?.addEventListener("click", () =>
+    withButtonBusy("agentBoardRunBtn", () =>
+      runTodayAgentPlan().catch((error) => {
+        $("globalBrainStatus").textContent = `今日 Agent 准备失败：${error.message}`;
+        $("contentHubStatus").textContent = `今日 Agent 准备失败：${error.message}`;
+      }),
+    ),
+  );
+  $("agentBoardDraftBtn")?.addEventListener("click", () => {
+    document.getElementById("content-hub")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  if ($("globalBrainStatus")) {
+    $("globalBrainStatus").textContent = `已刷新今日 Agent 看板：${sites.length} 个匹配站点，${keywords.length} 个关键词，${posts.length} 篇文章库存，${products.length} 个产品资产。`;
+  }
+  return;
   const siteRows = sites.map((site) => {
     const profile = site.profile || inferSiteProfile(site);
     return [
@@ -5385,13 +5711,6 @@ function renderGlobalBrain() {
     ];
   });
   const taskRows = tasks.map((task) => [task[0], task[1], task[2]]);
-  const opportunityRows = opportunities.slice(0, 8).map((item) => [
-    item.keyword,
-    item.siteName || item.assignedSite || "",
-    item.action || "",
-    item.priority || "",
-    item.score || 0,
-  ]);
   const dataRows = [
     ["关键词池", keywords.length ? "READY" : "MISSING", `${keywords.length} 个匹配当前市场；Semrush DB 应为 ${scopeLocale.semrushDatabase || "待拆分"}`],
     ["站点文章库", posts.length ? "READY" : "MISSING", `${posts.length} 篇已缓存文章；点击“按当前市场刷新看板”可手动读取匹配站点`],
@@ -5548,14 +5867,6 @@ function renderGlobalBrain() {
       ${reportDataTable(["优先级", "任务", "为什么做"], taskRows)}
     </section>
 
-    <section class="review-report-section global-brain-section">
-      <div class="review-report-section-head">
-        <p>CONTENT OPPORTUNITY SNAPSHOT</p>
-        <h4>内容机会快照</h4>
-        <span>这里读取内容中枢当前机会池。后续全局大脑会跨所有站点批量生成机会池，而不只看当前选中的站点。</span>
-      </div>
-      ${reportDataTable(["关键词", "目标站点", "动作", "优先级", "分数"], opportunityRows)}
-    </section>
   `;
 
   if ($("globalBrainStatus")) {
@@ -5569,6 +5880,98 @@ function focusGlobalBrainTaskQueue() {
   target.scrollIntoView({ behavior: "smooth", block: "start" });
   target.classList.add("is-flashing");
   window.setTimeout(() => target.classList.remove("is-flashing"), 1200);
+}
+
+function ensureAgentSelectedContentSite() {
+  const current = selectedContentSite();
+  if (current) return current;
+  const candidates = contentSiteOptions();
+  const preferred = candidates.find((site) => site.type === "blog" || site.type === "wp") || candidates[0];
+  if (!preferred) return null;
+  state.contentHub.selectedSiteKey = preferred.key;
+  state.contentHub.selectedSiteKeys = [preferred.key];
+  state.contentHub.source = contentSourceType(preferred);
+  state.contentHub.posts = [];
+  state.contentHub.opportunities = [];
+  state.contentHub.selectedIds = [];
+  state.contentHub.activeOpportunity = null;
+  state.contentHub.opportunityPage = 1;
+  state.contentHub.agentQueue = [];
+  state.contentHub.agentQueueBatchId = "";
+  state.contentHub.lastSummary = null;
+  renderContentHub();
+  return preferred;
+}
+
+async function runTodayAgentPlan() {
+  if (state.contentHub.agentQueueRunning) {
+    throw new Error("Agent 队列正在执行中，请等待当前任务完成，或清空队列后再重新运行。");
+  }
+  applyActivePage("agent");
+  history.pushState(null, "", "/page-agent");
+  window.scrollTo({ top: 0, behavior: "smooth" });
+
+  if (!state.keywords.length) {
+    throw new Error("还没有关键词池。请先导入 Semrush 文件，再运行今日 Agent。");
+  }
+
+  $("globalBrainStatus").textContent = "今日 Agent 正在准备：刷新站点文章库存、生成机会池、勾选优先词并创建队列...";
+  await refreshGlobalBrainPostInventory();
+
+  let targetSites = selectedContentSites();
+  if (!targetSites.length) {
+    const fallback = ensureAgentSelectedContentSite();
+    targetSites = fallback ? [fallback] : [];
+  }
+  if (!targetSites.length) {
+    throw new Error("当前市场没有可执行站点。请先在发布配置里添加站点，并在目标发布站点里选择一个或多个站点。");
+  }
+
+  const allOpportunities = [];
+  const allPosts = [];
+  state.contentHub.selectedSiteKeys = targetSites.map((site) => site.key);
+  state.contentHub.agentQueue = [];
+  state.contentHub.selectedIds = [];
+  state.contentHub.opportunities = [];
+
+  for (const [index, site] of targetSites.entries()) {
+    state.contentHub.selectedSiteKey = site.key;
+    state.contentHub.source = site.type;
+    $("contentHubStatus").textContent = `今日 Agent 正在分析 ${index + 1}/${targetSites.length}：${site.name}`;
+
+    const cachedPosts = state.globalBrain.postsBySite?.[site.key]?.posts || [];
+    if (cachedPosts.length) {
+      state.contentHub.posts = cachedPosts;
+      contentHubLoadState.lastLoadedKey = site.key;
+      contentHubLoadState.lastLoadedAt = Date.now();
+    } else {
+      await loadContentHubSitePosts({ autoPlan: false, force: false });
+    }
+
+    allPosts.push(...(state.contentHub.posts || []).map((post) => ({ ...post, sourceSiteKey: site.key, sourceSiteName: site.name })));
+    planContentOpportunities();
+    await aiReviewContentOpportunities();
+    allOpportunities.push(...(state.contentHub.opportunities || []));
+  }
+
+  state.contentHub.selectedSiteKey = targetSites[0].key;
+  state.contentHub.source = targetSites[0].type;
+  state.contentHub.posts = allPosts;
+  state.contentHub.opportunities = allOpportunities.sort((a, b) => b.score - a.score);
+  state.contentHub.opportunityPage = 1;
+  selectTopContentOpportunities();
+  const queue = createContentAgentQueueFromSelected();
+  renderGlobalBrain();
+  renderContentHub();
+
+  $("contentHubStatus").textContent = queue.length
+    ? `今日 Agent 已为 ${targetSites.length} 个站点准备 ${queue.length} 条任务。请检查队列，确认后点击“批准并生成/发布”。`
+    : `今日 Agent 已完成 ${targetSites.length} 个站点检查，但没有选出可执行任务。请查看决策摘要里的待复核原因。`;
+  $("globalBrainStatus").textContent = queue.length
+    ? `今日 Agent 已完成规划：${targetSites.map((site) => site.name).join(" / ")}，${queue.length} 条任务等待确认。`
+    : "今日 Agent 已完成规划：当前没有可执行队列，请先补齐缺失数据或调整关键词池。";
+  document.getElementById("content-hub")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  saveWorkspaceDraft("今日 Agent 已生成任务队列。");
 }
 
 async function loadGoogleReviewData() {
@@ -6448,26 +6851,42 @@ async function runContentAgentQueue() {
     return;
   }
 
-  const site = selectedContentSite();
-  if (!site) {
+  const firstTaskSite = activateContentSiteForAgent(queue[0]?.siteKey) || selectedContentSite();
+  if (!firstTaskSite) {
     $("contentHubStatus").textContent = "请先选择本次要执行的站点。";
     return;
   }
 
-  const batch = createContentGenerationBatch(site);
-  state.contentHub.lastBatchId = batch.batchId;
-  state.contentHub.lastBatchSiteKey = site.key;
-  state.contentHub.lastBatchLabel = batch.batchLabel;
-  state.contentHub.agentQueueBatchId = batch.batchId;
+  const batchBySiteKey = new Map();
   state.contentHub.agentQueueRunning = true;
 
   const log = [];
   const runnable = queue.filter((task) => ["queued", "failed"].includes(task.status));
-  $("batchGenerationLog").textContent = `Agent 队列准备执行 ${runnable.length}/${queue.length} 条任务。\n批次：${batch.batchId}\n目录：generated-articles/${site.name}/${batch.batchId}/\n`;
+  $("batchGenerationLog").textContent = `Agent 队列准备执行 ${runnable.length}/${queue.length} 条任务。\n目标站点：${Array.from(new Set(runnable.map((task) => task.siteName || task.siteKey))).join(" / ")}\n`;
   renderContentAgentQueue();
 
   for (let index = 0; index < runnable.length; index += 1) {
     const task = runnable[index];
+    const taskSite = activateContentSiteForAgent(task.siteKey);
+    if (!taskSite) {
+      updateAgentTask(task.id, {
+        status: "failed",
+        step: "目标站点不存在",
+        error: "任务记录里的目标站点没有找到，请重新运行今日 Agent。",
+        finishedAt: new Date().toISOString(),
+      });
+      log.push(`[失败] ${task.keyword}：目标站点不存在`);
+      $("batchGenerationLog").textContent = log.join("\n");
+      continue;
+    }
+    if (!batchBySiteKey.has(taskSite.key)) {
+      batchBySiteKey.set(taskSite.key, createContentGenerationBatch(taskSite));
+    }
+    const batch = batchBySiteKey.get(taskSite.key);
+    state.contentHub.lastBatchId = batch.batchId;
+    state.contentHub.lastBatchSiteKey = taskSite.key;
+    state.contentHub.lastBatchLabel = batch.batchLabel;
+    state.contentHub.agentQueueBatchId = batch.batchId;
     const opportunity = (state.contentHub.opportunities || []).find((item) => item.id === task.opportunityId);
     const keyword = opportunity ? state.keywords.find((item) => item.id === opportunity.keywordId) : null;
     if (!opportunity || !keyword) {
@@ -6492,7 +6911,7 @@ async function runContentAgentQueue() {
       });
       state.contentHub.activeOpportunity = opportunity;
       state.selectedId = keyword.id;
-      $("contentHubStatus").textContent = `Agent 正在执行 ${index + 1}/${runnable.length}：${opportunity.keyword}`;
+      $("contentHubStatus").textContent = `Agent 正在执行 ${index + 1}/${runnable.length}：${taskSite.name} / ${opportunity.keyword}`;
       await refreshSelected();
       updateAgentTask(task.id, {
         status: "running",
@@ -6535,7 +6954,7 @@ async function runContentAgentQueue() {
         savedPath: state.articleSave?.relativePath || "",
         finishedAt: new Date().toISOString(),
       });
-      log.push(`[完成] ${opportunity.keyword}${savedPath}`);
+      log.push(`[完成] ${taskSite.name} -> ${opportunity.keyword}${savedPath}`);
     } catch (error) {
       updateAgentTask(task.id, {
         status: "failed",
@@ -6552,52 +6971,59 @@ async function runContentAgentQueue() {
   state.contentHub.agentQueueRunning = false;
   const completedCount = log.filter((line) => line.startsWith("[完成]")).length;
   if (state.contentHub.agentAutoUpload !== false && completedCount > 0) {
-    if (!["blog", "wp"].includes(site.type)) {
-      state.contentHub.agentQueue = (state.contentHub.agentQueue || []).map((task) =>
-        task.status === "generated"
-          ? {
-              ...task,
-              step: "已生成，等待发布适配",
-              message: "当前站点类型暂未接入 Agent 自动导入，文章已保存到本地 Markdown，可走对应发布入口。",
-              updatedAt: new Date().toISOString(),
-            }
-          : task,
-      );
-      log.push(`[保留] ${site.name}：当前站点类型暂未接入 Agent 自动导入，已保存本地 Markdown。`);
-    } else {
-    try {
-      $("contentHubStatus").textContent = `Agent 已生成 ${completedCount} 篇，正在自动导入 ${site.name}...`;
-      const uploadResult = await uploadGeneratedArticlesToContentSite({ source: "agent" });
-      const failedCount = Array.isArray(uploadResult?.failed) ? uploadResult.failed.length : 0;
-      const uploadedAt = new Date().toISOString();
-      state.contentHub.agentQueue = (state.contentHub.agentQueue || []).map((task) =>
-        task.status === "generated"
-          ? {
-              ...task,
-              status: failedCount ? "generated" : "uploaded",
-              step: failedCount ? "已生成，导入需复核" : "已导入当前站点",
-              message: failedCount
-                ? "本批次存在导入失败项，请查看批量生成日志和站点接口响应。"
-                : "文章已按当前站点配置导入，发布状态以站点默认配置为准。",
-              uploadedAt: failedCount ? "" : uploadedAt,
-              updatedAt: uploadedAt,
-            }
-          : task,
-      );
-      log.push(failedCount ? `[导入复核] 存在 ${failedCount} 个失败项，请查看日志。` : `[导入完成] Agent 已自动导入当前站点。`);
-    } catch (error) {
-      state.contentHub.agentQueue = (state.contentHub.agentQueue || []).map((task) =>
-        task.status === "generated"
-          ? {
-              ...task,
-              step: "已生成，导入失败",
-              error: `自动导入失败：${error.message}`,
-              updatedAt: new Date().toISOString(),
-            }
-          : task,
-      );
-      log.push(`[导入失败] ${error.message}`);
-    }
+    for (const [siteKey, batch] of batchBySiteKey.entries()) {
+      const site = activateContentSiteForAgent(siteKey);
+      if (!site) continue;
+      state.contentHub.lastBatchId = batch.batchId;
+      state.contentHub.lastBatchSiteKey = site.key;
+      state.contentHub.lastBatchLabel = batch.batchLabel;
+      if (!["blog", "wp"].includes(site.type)) {
+        state.contentHub.agentQueue = (state.contentHub.agentQueue || []).map((task) =>
+          task.siteKey === site.key && task.status === "generated"
+            ? {
+                ...task,
+                step: "已生成，等待发布适配",
+                message: "当前站点类型暂未接入 Agent 自动导入，文章已保存到本地 Markdown，可走对应发布入口。",
+                updatedAt: new Date().toISOString(),
+              }
+            : task,
+        );
+        log.push(`[保留] ${site.name}：当前站点类型暂未接入 Agent 自动导入，已保存本地 Markdown。`);
+        continue;
+      }
+      try {
+        $("contentHubStatus").textContent = `Agent 已生成文章，正在自动导入 ${site.name}...`;
+        const uploadResult = await uploadGeneratedArticlesToContentSite({ source: "agent" });
+        const failedCount = Array.isArray(uploadResult?.failed) ? uploadResult.failed.length : 0;
+        const uploadedAt = new Date().toISOString();
+        state.contentHub.agentQueue = (state.contentHub.agentQueue || []).map((task) =>
+          task.siteKey === site.key && task.status === "generated"
+            ? {
+                ...task,
+                status: failedCount ? "generated" : "uploaded",
+                step: failedCount ? "已生成，导入需复核" : "已导入目标站点",
+                message: failedCount
+                  ? "本批次存在导入失败项，请查看批量生成日志和站点接口响应。"
+                  : `文章已导入 ${site.name}，发布状态以站点默认配置为准。`,
+                uploadedAt: failedCount ? "" : uploadedAt,
+                updatedAt: uploadedAt,
+              }
+            : task,
+        );
+        log.push(failedCount ? `[导入复核] ${site.name} 存在 ${failedCount} 个失败项。` : `[导入完成] ${site.name}`);
+      } catch (error) {
+        state.contentHub.agentQueue = (state.contentHub.agentQueue || []).map((task) =>
+          task.siteKey === site.key && task.status === "generated"
+            ? {
+                ...task,
+                step: "已生成，导入失败",
+                error: `自动导入失败：${error.message}`,
+                updatedAt: new Date().toISOString(),
+              }
+            : task,
+        );
+        log.push(`[导入失败] ${site.name}：${error.message}`);
+      }
     }
   }
   $("batchGenerationLog").textContent = log.join("\n");
@@ -7152,7 +7578,8 @@ function bindEvents() {
     ),
   );
   $("contentSiteSelect").addEventListener("change", () => {
-    state.contentHub.selectedSiteKey = $("contentSiteSelect").value;
+    state.contentHub.selectedSiteKeys = Array.from($("contentSiteSelect").selectedOptions || []).map((option) => option.value).filter(Boolean);
+    state.contentHub.selectedSiteKey = state.contentHub.selectedSiteKeys[0] || "";
     state.contentHub.source = contentSourceType();
     state.contentHub.posts = [];
     state.contentHub.opportunities = [];
@@ -7166,10 +7593,10 @@ function bindEvents() {
     contentHubLoadState.lastLoadedAt = 0;
     renderContentHub();
     renderBulkPublish();
-    const site = selectedContentSite();
-    $("contentHubStatus").textContent = site
-      ? `已选择 ${site.name}。为避免重复请求远程 API，请点击“读取/刷新文章”后再规划内容机会。`
-      : "请先选择一个具体站点。";
+    const sites = selectedContentSites();
+    $("contentHubStatus").textContent = sites.length
+      ? `已选择 ${sites.length} 个目标发布站点：${sites.map((site) => site.name).join(" / ")}。点击“运行今日 Agent”后，会逐站点读取库存并生成决策。`
+      : "请先选择一个或多个目标发布站点。";
     saveWorkspaceDraft();
   });
   $("contentNoMainLinksInput").addEventListener("change", () => {
@@ -7291,6 +7718,14 @@ function bindEvents() {
   );
   $("testSerpApiBtn").addEventListener("click", () =>
     withButtonBusy("testSerpApiBtn", () => testSerpApiSearch().catch((error) => ($("serpApiStatus").textContent = `SERP 拉取失败：${error.message}`))),
+  );
+  $("runTodayAgentBtn").addEventListener("click", () =>
+    withButtonBusy("runTodayAgentBtn", () =>
+      runTodayAgentPlan().catch((error) => {
+        $("globalBrainStatus").textContent = `今日 Agent 准备失败：${error.message}`;
+        $("contentHubStatus").textContent = `今日 Agent 准备失败：${error.message}`;
+      }),
+    ),
   );
   $("refreshGlobalBrainBtn").addEventListener("click", () =>
     withButtonBusy("refreshGlobalBrainBtn", () => refreshGlobalBrainPostInventory().catch((error) => ($("globalBrainStatus").textContent = `刷新失败：${error.message}`))),
